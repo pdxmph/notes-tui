@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -19,6 +20,8 @@ type model struct {
 	selected   string          // selected file
 	searchMode bool            // are we in search mode?
 	search     textinput.Model // search input
+	createMode bool            // are we in create mode?
+	createInput textinput.Model // create note input
 	cwd        string          // current working directory
 }
 
@@ -40,11 +43,18 @@ func initialModel() model {
 	ti.CharLimit = 100
 	ti.Width = 50
 
+	// Create note input
+	ci := textinput.New()
+	ci.Placeholder = "Note title..."
+	ci.CharLimit = 100
+	ci.Width = 50
+
 	return model{
-		files:    files,
-		filtered: files, // Initially show all files
-		search:   ti,
-		cwd:      cwd,
+		files:       files,
+		filtered:    files, // Initially show all files
+		search:      ti,
+		createInput: ci,
+		cwd:         cwd,
 	}
 }
 
@@ -101,6 +111,45 @@ func filterFiles(files []string, query string) []string {
 	
 	return filtered
 }
+
+// Convert title to filename
+func titleToFilename(title string) string {
+	// Convert to lowercase
+	filename := strings.ToLower(title)
+	
+	// Replace spaces with hyphens
+	filename = strings.ReplaceAll(filename, " ", "-")
+	
+	// Remove any characters that aren't alphanumeric or hyphens
+	var result strings.Builder
+	for _, r := range filename {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			result.WriteRune(r)
+		}
+	}
+	
+	// Clean up multiple hyphens
+	cleaned := result.String()
+	for strings.Contains(cleaned, "--") {
+		cleaned = strings.ReplaceAll(cleaned, "--", "-")
+	}
+	
+	// Trim hyphens from start and end
+	cleaned = strings.Trim(cleaned, "-")
+	
+	// Add .md extension
+	if cleaned == "" {
+		cleaned = "untitled"
+	}
+	
+	return cleaned + ".md"
+}
+
+// Get today's daily note filename
+func getDailyNoteFilename() string {
+	today := time.Now().Format("2006-01-02")
+	return today + "-daily.md"
+}
 func (m model) Init() tea.Cmd {
 	return nil
 }
@@ -120,6 +169,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 				return m, nil
 			}
+			if m.createMode {
+				// Exit create mode on q
+				m.createMode = false
+				m.createInput.SetValue("")
+				return m, nil
+			}
 			return m, tea.Quit
 
 		case "esc":
@@ -130,25 +185,79 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.createMode {
+				// Exit create mode
+				m.createMode = false
+				m.createInput.SetValue("")
+			}
+
+		case "ctrl+n":
+			if !m.searchMode && !m.createMode {
+				// Enter create mode
+				m.createMode = true
+				m.createInput.Focus()
+				return m, nil
+			}
+
+		case "ctrl+d":
+			if !m.searchMode && !m.createMode {
+				// Create or open daily note
+				filename := getDailyNoteFilename()
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Check if file exists
+				if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+					// Create the daily note with a header
+					today := time.Now().Format("Monday, January 2, 2006")
+					content := fmt.Sprintf("# Daily Note - %s\n\n## Tasks\n\n## Notes\n\n", today)
+					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+						m.selected = fullPath
+						return m, tea.Quit
+					}
+				} else {
+					// File exists, just open it
+					m.selected = fullPath
+					return m, tea.Quit
+				}
+			}
 
 		case "/":
-			// Enter search mode
-			m.searchMode = true
-			m.search.Focus()
-			return m, nil
+			if !m.createMode {
+				// Enter search mode
+				m.searchMode = true
+				m.search.Focus()
+				return m, nil
+			}
 
 		case "up", "k":
-			if !m.searchMode && m.cursor > 0 {
+			if !m.searchMode && !m.createMode && m.cursor > 0 {
 				m.cursor--
 			}
 
 		case "down", "j":
-			if !m.searchMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.createMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 			}
 
 		case "enter":
-			if m.searchMode {
+			if m.createMode {
+				// Create the new note
+				title := m.createInput.Value()
+				if title != "" {
+					filename := titleToFilename(title)
+					fullPath := filepath.Join(m.cwd, filename)
+					
+					// Create the file with the title as the first line
+					content := fmt.Sprintf("# %s\n\n", title)
+					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+						m.selected = fullPath
+						return m, tea.Quit
+					}
+				}
+				// Exit create mode
+				m.createMode = false
+				m.createInput.SetValue("")
+			} else if m.searchMode {
 				// Exit search mode on enter
 				m.searchMode = false
 			} else if m.cursor < len(m.filtered) {
@@ -166,6 +275,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cursor = 0 // Reset cursor when filtering
 	}
 
+	// Handle create input
+	if m.createMode {
+		m.createInput, cmd = m.createInput.Update(msg)
+	}
+
 	return m, cmd
 }
 func (m model) View() string {
@@ -174,7 +288,12 @@ func (m model) View() string {
 	// Header
 	s.WriteString(fmt.Sprintf("Notes (%d files)\n\n", len(m.filtered)))
 
-	if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
+	if m.createMode {
+		// Create mode view
+		s.WriteString("Create New Note\n\n")
+		s.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
+		s.WriteString("[Enter] create [Esc] cancel")
+	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
 		s.WriteString("No files match your search.\n\n")
 	} else if len(m.files) == 0 {
 		s.WriteString("No markdown files found.\n\n")
@@ -203,13 +322,15 @@ func (m model) View() string {
 		}
 	}
 
-	// Search field at bottom
-	s.WriteString("\n")
-	if m.searchMode {
-		s.WriteString(fmt.Sprintf("Search: %s\n", m.search.View()))
-		s.WriteString("[Esc] cancel [Enter] select")
-	} else {
-		s.WriteString("[/] search [Enter] open [q] quit")
+	// Bottom help text
+	if !m.createMode {
+		s.WriteString("\n")
+		if m.searchMode {
+			s.WriteString(fmt.Sprintf("Search: %s\n", m.search.View()))
+			s.WriteString("[Esc] cancel [Enter] select")
+		} else {
+			s.WriteString("[/] search [Enter] open [Ctrl+N] new [Ctrl+D] daily [q] quit")
+		}
 	}
 
 	return s.String()
