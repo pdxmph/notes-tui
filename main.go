@@ -11,7 +11,6 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 )
 
@@ -28,15 +27,18 @@ type model struct {
 	tagInput    textinput.Model // tag search input
 	taskFilter  bool            // are we showing only files with tasks?
 	cwd         string          // current working directory
-	previewContent string       // content of the currently selected file
 	width       int             // terminal width
 	height      int             // terminal height
-	lastPreviewedFile string   // track which file is currently previewed
+	// Preview popover state
+	previewMode    bool            // are we showing preview popover?
+	previewContent string          // content for preview popover
+	previewFile    string          // file being previewed
+	previewScroll  int             // scroll position in preview
 }
 
 // Message for preview content
 type previewLoadedMsg struct {
-	content string
+	content  string
 	filepath string
 }
 
@@ -241,23 +243,145 @@ func searchTasks(dir string) ([]string, error) {
 	return files, nil
 }
 func (m model) Init() tea.Cmd {
-	return tea.Batch(
-		tea.WindowSize(),
-		m.loadPreview(), // Load initial preview
-	)
+	return tea.WindowSize()
 }
 
-// Load the content of the selected file
-func (m *model) loadPreview() tea.Cmd {
-	// Don't reload if we're already showing this file
+// Simple markdown renderer for fast preview
+func renderSimpleMarkdown(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	var result []string
+	
+	// Skip YAML frontmatter
+	startIdx := 0
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		// Find the closing ---
+		for i := 1; i < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == "---" {
+				startIdx = i + 1
+				break
+			}
+		}
+	}
+	
+	// Define styles
+	h1Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	h2Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
+	h3Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
+	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	bulletStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	
+	inCodeBlock := false
+	
+	for i := startIdx; i < len(lines); i++ {
+		line := lines[i]
+		// Handle code blocks
+		if strings.HasPrefix(line, "```") {
+			inCodeBlock = !inCodeBlock
+			if inCodeBlock {
+				result = append(result, codeStyle.Render("─────────────────────"))
+			} else {
+				result = append(result, codeStyle.Render("─────────────────────"))
+			}
+			continue
+		}
+		
+		if inCodeBlock {
+			result = append(result, codeStyle.Render(line))
+			continue
+		}
+		
+		// Handle headers
+		if strings.HasPrefix(line, "# ") {
+			result = append(result, h1Style.Render(strings.TrimPrefix(line, "# ")))
+		} else if strings.HasPrefix(line, "## ") {
+			result = append(result, h2Style.Render(strings.TrimPrefix(line, "## ")))
+		} else if strings.HasPrefix(line, "### ") {
+			result = append(result, h3Style.Render(strings.TrimPrefix(line, "### ")))
+		} else if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			// Handle bullet points
+			bullet := bulletStyle.Render("•")
+			content := strings.TrimPrefix(strings.TrimPrefix(line, "- "), "* ")
+			result = append(result, fmt.Sprintf("%s %s", bullet, content))
+		} else if strings.HasPrefix(line, "> ") {
+			// Handle blockquotes
+			quoteLine := strings.TrimPrefix(line, "> ")
+			result = append(result, lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("8")).Render("│ " + quoteLine))
+		} else if strings.TrimSpace(line) == "---" || strings.TrimSpace(line) == "***" {
+			// Handle horizontal rules
+			result = append(result, strings.Repeat("─", width-6))
+		} else {
+			// Handle inline formatting
+			formatted := line
+			
+			// Bold
+			for strings.Contains(formatted, "**") {
+				start := strings.Index(formatted, "**")
+				if start == -1 {
+					break
+				}
+				end := strings.Index(formatted[start+2:], "**")
+				if end == -1 {
+					break
+				}
+				end += start + 2
+				
+				before := formatted[:start]
+				bold := lipgloss.NewStyle().Bold(true).Render(formatted[start+2:end])
+				after := formatted[end+2:]
+				formatted = before + bold + after
+			}
+			
+			// Italic
+			for strings.Contains(formatted, "*") && !strings.Contains(formatted, "**") {
+				start := strings.Index(formatted, "*")
+				if start == -1 {
+					break
+				}
+				end := strings.Index(formatted[start+1:], "*")
+				if end == -1 {
+					break
+				}
+				end += start + 1
+				
+				before := formatted[:start]
+				italic := lipgloss.NewStyle().Italic(true).Render(formatted[start+1:end])
+				after := formatted[end+1:]
+				formatted = before + italic + after
+			}
+			
+			// Inline code
+			for strings.Contains(formatted, "`") {
+				start := strings.Index(formatted, "`")
+				if start == -1 {
+					break
+				}
+				end := strings.Index(formatted[start+1:], "`")
+				if end == -1 {
+					break
+				}
+				end += start + 1
+				
+				before := formatted[:start]
+				code := codeStyle.Render(formatted[start+1:end])
+				after := formatted[end+1:]
+				formatted = before + code + after
+			}
+			
+			result = append(result, formatted)
+		}
+	}
+	
+	return strings.Join(result, "\n")
+}
+
+// Load preview content for popover (with simple markdown rendering)
+func (m *model) loadPreviewForPopover() tea.Cmd {
 	if m.cursor >= len(m.filtered) || m.cursor < 0 {
 		return nil
 	}
 	
 	filepath := m.filtered[m.cursor]
-	if filepath == m.lastPreviewedFile {
-		return nil // Already showing this file
-	}
+	width := m.width // Capture width for the closure
 	
 	return func() tea.Msg {
 		content, err := os.ReadFile(filepath)
@@ -268,19 +392,9 @@ func (m *model) loadPreview() tea.Cmd {
 			}
 		}
 		
-		// Render markdown with glamour
-		renderer, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
-			glamour.WithWordWrap(m.width * 60 / 100), // 60% of terminal width
-		)
-		
-		rendered, err := renderer.Render(string(content))
-		if err != nil {
-			return previewLoadedMsg{
-				content: string(content), // Fall back to raw content
-				filepath: filepath,
-			}
-		}
+		// Use simple markdown renderer
+		popoverContentWidth := (width * 80 / 100) - 6
+		rendered := renderSimpleMarkdown(string(content), popoverContentWidth)
 		
 		return previewLoadedMsg{
 			content: rendered,
@@ -297,16 +411,76 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		// Reload preview with new width
-		m.lastPreviewedFile = "" // Force reload with new dimensions
-		return m, m.loadPreview()
+		// If in preview mode, reload with new dimensions
+		if m.previewMode {
+			return m, m.loadPreviewForPopover()
+		}
+		return m, nil
 
 	case previewLoadedMsg:
 		m.previewContent = msg.content
-		m.lastPreviewedFile = msg.filepath
 		return m, nil
 
 	case tea.KeyMsg:
+		// Handle preview mode separately
+		if m.previewMode {
+			switch msg.String() {
+			case "esc", "q":
+				m.previewMode = false
+				m.previewContent = ""
+				m.previewScroll = 0
+				return m, nil
+			
+			case "e", "ctrl+e":
+				// Open in editor from preview
+				m.previewMode = false
+				m.previewContent = ""
+				m.previewScroll = 0
+				m.selected = m.previewFile
+				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+					return nil
+				})
+			
+			case "up", "k":
+				if m.previewScroll > 0 {
+					m.previewScroll--
+				}
+				return m, nil
+			
+			case "down", "j":
+				// Check if we can scroll down
+				lines := strings.Split(m.previewContent, "\n")
+				contentHeight := (m.height * 80 / 100) - 8
+				if m.previewScroll < len(lines)-contentHeight {
+					m.previewScroll++
+				}
+				return m, nil
+			
+			case "pgup":
+				contentHeight := (m.height * 80 / 100) - 8
+				m.previewScroll -= contentHeight
+				if m.previewScroll < 0 {
+					m.previewScroll = 0
+				}
+				return m, nil
+				
+			case "pgdown", " ": // Space bar also pages down
+				lines := strings.Split(m.previewContent, "\n")
+				contentHeight := (m.height * 80 / 100) - 8
+				m.previewScroll += contentHeight
+				maxScroll := len(lines) - contentHeight
+				if m.previewScroll > maxScroll {
+					m.previewScroll = maxScroll
+				}
+				if m.previewScroll < 0 {
+					m.previewScroll = 0
+				}
+				return m, nil
+			}
+			return m, nil
+		}
+
+		// Normal mode key handling
 		switch msg.String() {
 		case "ctrl+c", "q":
 			if m.searchMode {
@@ -315,8 +489,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				m.lastPreviewedFile = "" // Clear preview cache
-				return m, m.loadPreview()
+				return m, nil
 			}
 			if m.createMode {
 				// Exit create mode on q
@@ -330,18 +503,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				m.lastPreviewedFile = "" // Clear preview cache
-				return m, m.loadPreview()
+				return m, nil
 			}
 			return m, tea.Quit
 
 		case "e", "ctrl+e":
 			// Open in external editor
-			if m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered) {
 				m.selected = m.filtered[m.cursor]
 				// We'll handle the actual editor opening after we return
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-					return m.loadPreview()
+					return nil
 				})
 			}
 
@@ -352,8 +524,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				m.lastPreviewedFile = "" // Clear preview cache
-				cmds = append(cmds, m.loadPreview())
 			}
 			if m.createMode {
 				// Exit create mode
@@ -366,16 +536,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				m.lastPreviewedFile = "" // Clear preview cache
-				cmds = append(cmds, m.loadPreview())
 			}
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
 				m.filtered = m.files
 				m.cursor = 0
-				m.lastPreviewedFile = "" // Clear preview cache
-				cmds = append(cmds, m.loadPreview())
 			}
 
 		case "ctrl+n":
@@ -410,7 +576,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								break
 							}
 						}
-						return m, m.loadPreview()
+						return m, nil
 					}
 				} else {
 					// File exists, just open it
@@ -422,7 +588,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							break
 						}
 					}
-					return m, m.loadPreview()
+					return m, nil
 				}
 			}
 
@@ -449,8 +615,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.filtered = files
 					m.cursor = 0
 					m.taskFilter = true
-					m.lastPreviewedFile = "" // Clear preview cache
-					cmds = append(cmds, m.loadPreview())
 				}
 			}
 
@@ -474,8 +638,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if files, err := searchTag(m.cwd, tag); err == nil {
 						m.filtered = files
 						m.cursor = 0
-						m.lastPreviewedFile = "" // Clear preview cache
-						cmds = append(cmds, m.loadPreview())
 					}
 				}
 				// Exit tag mode
@@ -506,7 +668,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						// Exit create mode
 						m.createMode = false
 						m.createInput.SetValue("")
-						return m, m.loadPreview()
+						return m, nil
 					}
 				}
 				// Exit create mode
@@ -516,8 +678,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit search mode on enter
 				m.searchMode = false
 			} else if m.cursor < len(m.filtered) {
+				// Show preview popover
 				m.selected = m.filtered[m.cursor]
-				return m, m.loadPreview()
+				m.previewFile = m.selected
+				m.previewMode = true
+				m.previewScroll = 0
+				return m, m.loadPreviewForPopover()
 			}
 		}
 	}
@@ -528,7 +694,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		query := m.search.Value()
 		m.filtered = filterFiles(m.files, query)
 		m.cursor = 0 // Reset cursor when filtering
-		m.lastPreviewedFile = "" // Clear preview cache so Enter will load the new file
 		cmds = append(cmds, cmd)
 	}
 
@@ -571,51 +736,50 @@ func (m model) View() string {
 		return "Loading..."
 	}
 
-	// Calculate pane widths
-	leftWidth := m.width * 40 / 100
-	rightWidth := m.width - leftWidth - 1 // -1 for border
+	// If in preview mode, show the popover
+	if m.previewMode {
+		return m.renderPreviewPopover()
+	}
 
-	// Create styles
-	leftPaneStyle := lipgloss.NewStyle().
-		Width(leftWidth).
-		Height(m.height - 1) // -1 for status line
+	// Calculate margins (15% each side)
+	marginSize := m.width * 15 / 100
+	contentWidth := m.width - (marginSize * 2)
+	
+	// Create main content style with margins
+	contentStyle := lipgloss.NewStyle().
+		Width(contentWidth).
+		MarginLeft(marginSize).
+		MarginRight(marginSize)
 
-	rightPaneStyle := lipgloss.NewStyle().
-		Width(rightWidth).
-		Height(m.height - 1).
-		BorderStyle(lipgloss.NormalBorder()).
-		BorderLeft(true).
-		Padding(1)
-
-	// Build left pane (file list)
-	var leftPane strings.Builder
+	// Build content
+	var content strings.Builder
 	
 	// Header
 	header := fmt.Sprintf("Notes (%d files)", len(m.filtered))
 	if m.taskFilter {
 		header += " - [Tasks]"
 	}
-	leftPane.WriteString(header + "\n\n")
+	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
 
 	if m.tagMode {
 		// Tag search mode
-		leftPane.WriteString("Search by Tag\n\n")
-		leftPane.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
-		leftPane.WriteString("[Enter] search [Esc] cancel")
+		content.WriteString("Search by Tag\n\n")
+		content.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
+		content.WriteString("[Enter] search [Esc] cancel")
 	} else if m.createMode {
 		// Create mode
-		leftPane.WriteString("Create New Note\n\n")
-		leftPane.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
-		leftPane.WriteString("[Enter] create [Esc] cancel")
+		content.WriteString("Create New Note\n\n")
+		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
+		content.WriteString("[Enter] create [Esc] cancel")
 	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
-		leftPane.WriteString("No files match your search.\n\n")
+		content.WriteString("No files match your search.\n\n")
 	} else if len(m.filtered) == 0 && !m.searchMode {
-		leftPane.WriteString("No files found.\n\n")
+		content.WriteString("No files found.\n\n")
 	} else if len(m.files) == 0 {
-		leftPane.WriteString("No markdown files found.\n\n")
+		content.WriteString("No markdown files found.\n\n")
 	} else {
 		// Show file list
-		maxVisible := m.height - 7 // Leave room for header and bottom help
+		maxVisible := m.height - 8 // Leave room for header, search, and help
 		startIdx := 0
 		
 		// Adjust view window if cursor is outside
@@ -630,52 +794,98 @@ func (m model) View() string {
 			}
 			
 			displayName := getDisplayName(m.filtered[i], m.cwd)
-			// Truncate if too long for left pane
-			maxLen := leftWidth - 3
+			// Truncate if too long
+			maxLen := contentWidth - 3
 			if len(displayName) > maxLen {
 				displayName = displayName[:maxLen-3] + "..."
 			}
-			leftPane.WriteString(fmt.Sprintf("%s%s\n", cursor, displayName))
+			content.WriteString(fmt.Sprintf("%s%s\n", cursor, displayName))
 		}
 		
 		if len(m.filtered) > maxVisible {
 			remaining := len(m.filtered) - startIdx - maxVisible
 			if remaining > 0 {
-				leftPane.WriteString(fmt.Sprintf("\n... %d more\n", remaining))
+				content.WriteString(fmt.Sprintf("\n... %d more files\n", remaining))
 			}
 		}
 	}
 
-	// Add search field at bottom of left pane
-	leftPane.WriteString("\n")
-	if m.searchMode {
-		leftPane.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
-	}
-
-	// Build right pane (preview)
-	rightPane := m.previewContent
-	if rightPane == "" {
-		rightPane = "Welcome to notes-tui!\n\n• Navigate with ↑↓ or j/k\n• Press Enter to preview a file\n• Press e to edit in external editor\n• Press / to search\n• Press q to quit"
-	}
-
-	// Combine panes
-	combined := lipgloss.JoinHorizontal(
-		lipgloss.Top,
-		leftPaneStyle.Render(leftPane.String()),
-		rightPaneStyle.Render(rightPane),
-	)
-
-	// Add status line at bottom
-	statusLine := "\n"
-	if !m.createMode && !m.tagMode {
+	// Add search field at bottom
+	if !m.tagMode && !m.createMode {
+		content.WriteString("\n")
 		if m.searchMode {
-			statusLine = "[Esc] cancel | [Enter] preview"
+			content.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
 		} else {
-			statusLine = "[↑↓/jk] navigate | [Enter] preview | [/] search | [#] tags | [Ctrl+T] tasks | [Ctrl+N] new | [e] edit | [q] quit"
+			// Help text
+			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+			help := "[/] search  [Enter] preview  [e] edit  [Ctrl+N] new  [Ctrl+D] daily  [q] quit"
+			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
 
-	return combined + "\n" + statusLine
+	return contentStyle.Render(content.String())
+}
+
+func (m model) renderPreviewPopover() string {
+	// Create a popover style
+	popoverStyle := lipgloss.NewStyle().
+		Width(m.width * 80 / 100).          // 80% of terminal width
+		Height(m.height * 80 / 100).        // 80% of terminal height
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Padding(1, 2)
+	
+	// Position in center
+	centerStyle := lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center)
+	
+	// Header with filename
+	header := lipgloss.NewStyle().
+		Bold(true).
+		MarginBottom(1).
+		Render(getDisplayName(m.previewFile, m.cwd))
+	
+	// Footer with controls
+	footer := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		MarginTop(1).
+		Render("[Esc] close  [↑↓/jk] scroll  [e] edit")
+	
+	// Calculate available height for content
+	contentHeight := (m.height * 80 / 100) - 8 // Account for borders, padding, header, footer
+	
+	// Split content into lines and handle scrolling
+	lines := strings.Split(m.previewContent, "\n")
+	visibleLines := lines
+	
+	if len(lines) > contentHeight {
+		// Apply scrolling
+		end := m.previewScroll + contentHeight
+		if end > len(lines) {
+			end = len(lines)
+		}
+		visibleLines = lines[m.previewScroll:end]
+		
+		// Add scroll indicator
+		scrollInfo := fmt.Sprintf(" (line %d/%d)", m.previewScroll+1, len(lines))
+		header += lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(scrollInfo)
+	}
+	
+	// Join the visible content
+	content := strings.Join(visibleLines, "\n")
+	
+	// Combine everything
+	popoverContent := lipgloss.JoinVertical(
+		lipgloss.Left,
+		header,
+		content,
+		footer,
+	)
+	
+	popover := popoverStyle.Render(popoverContent)
+	return centerStyle.Render(popover)
 }
 
 func main() {
