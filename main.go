@@ -31,6 +31,13 @@ type model struct {
 	previewContent string       // content of the currently selected file
 	width       int             // terminal width
 	height      int             // terminal height
+	lastPreviewedFile string   // track which file is currently previewed
+}
+
+// Message for preview content
+type previewLoadedMsg struct {
+	content string
+	filepath string
 }
 
 func initialModel() model {
@@ -236,22 +243,29 @@ func searchTasks(dir string) ([]string, error) {
 func (m model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.WindowSize(),
-		m.loadPreview(),
+		m.loadPreview(), // Load initial preview
 	)
 }
 
 // Load the content of the selected file
 func (m *model) loadPreview() tea.Cmd {
+	// Don't reload if we're already showing this file
+	if m.cursor >= len(m.filtered) || m.cursor < 0 {
+		return nil
+	}
+	
+	filepath := m.filtered[m.cursor]
+	if filepath == m.lastPreviewedFile {
+		return nil // Already showing this file
+	}
+	
 	return func() tea.Msg {
-		if m.cursor >= len(m.filtered) || m.cursor < 0 {
-			return nil
-		}
-		
-		filepath := m.filtered[m.cursor]
 		content, err := os.ReadFile(filepath)
 		if err != nil {
-			m.previewContent = fmt.Sprintf("Error reading file: %v", err)
-			return nil
+			return previewLoadedMsg{
+				content: fmt.Sprintf("Error reading file: %v", err),
+				filepath: filepath,
+			}
 		}
 		
 		// Render markdown with glamour
@@ -262,12 +276,16 @@ func (m *model) loadPreview() tea.Cmd {
 		
 		rendered, err := renderer.Render(string(content))
 		if err != nil {
-			m.previewContent = string(content) // Fall back to raw content
-		} else {
-			m.previewContent = rendered
+			return previewLoadedMsg{
+				content: string(content), // Fall back to raw content
+				filepath: filepath,
+			}
 		}
 		
-		return nil
+		return previewLoadedMsg{
+			content: rendered,
+			filepath: filepath,
+		}
 	}
 }
 
@@ -280,7 +298,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		// Reload preview with new width
+		m.lastPreviewedFile = "" // Force reload with new dimensions
 		return m, m.loadPreview()
+
+	case previewLoadedMsg:
+		m.previewContent = msg.content
+		m.lastPreviewedFile = msg.filepath
+		return m, nil
 
 	case tea.KeyMsg:
 		switch msg.String() {
@@ -291,6 +315,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				m.lastPreviewedFile = "" // Clear preview cache
 				return m, m.loadPreview()
 			}
 			if m.createMode {
@@ -305,6 +330,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				m.lastPreviewedFile = "" // Clear preview cache
 				return m, m.loadPreview()
 			}
 			return m, tea.Quit
@@ -427,13 +453,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "up", "k":
 			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor > 0 {
 				m.cursor--
-				cmds = append(cmds, m.loadPreview())
+				// Don't auto-load preview on cursor movement
 			}
 
 		case "down", "j":
 			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
-				cmds = append(cmds, m.loadPreview())
+				// Don't auto-load preview on cursor movement
 			}
 
 		case "enter":
@@ -628,7 +654,7 @@ func (m model) View() string {
 	// Build right pane (preview)
 	rightPane := m.previewContent
 	if rightPane == "" {
-		rightPane = "Select a file to preview\n\nPress Enter to preview\nPress e to edit in external editor"
+		rightPane = "Welcome to notes-tui!\n\n• Navigate with ↑↓ or j/k\n• Press Enter to preview a file\n• Press e to edit in external editor\n• Press / to search\n• Press q to quit"
 	}
 
 	// Combine panes
@@ -644,7 +670,7 @@ func (m model) View() string {
 		if m.searchMode {
 			statusLine = "[Esc] cancel | [Enter] preview"
 		} else {
-			statusLine = "[/] search | [#] tags | [Ctrl+T] tasks | [Ctrl+N] new | [Ctrl+D] daily | [e] edit | [q] quit"
+			statusLine = "[↑↓/jk] navigate | [Enter] preview | [/] search | [#] tags | [Ctrl+T] tasks | [Ctrl+N] new | [e] edit | [q] quit"
 		}
 	}
 
