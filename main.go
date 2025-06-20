@@ -898,7 +898,7 @@ func main() {
 		}
 	}
 
-	p := tea.NewProgram(initialModel())
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		log.Fatal(err)
