@@ -14,15 +14,18 @@ import (
 )
 
 type model struct {
-	files      []string        // all markdown files
-	filtered   []string        // filtered results
-	cursor     int             // which file is selected
-	selected   string          // selected file
-	searchMode bool            // are we in search mode?
-	search     textinput.Model // search input
-	createMode bool            // are we in create mode?
+	files       []string        // all markdown files
+	filtered    []string        // filtered results
+	cursor      int             // which file is selected
+	selected    string          // selected file
+	searchMode  bool            // are we in search mode?
+	search      textinput.Model // search input
+	createMode  bool            // are we in create mode?
 	createInput textinput.Model // create note input
-	cwd        string          // current working directory
+	tagMode     bool            // are we in tag search mode?
+	tagInput    textinput.Model // tag search input
+	taskFilter  bool            // are we showing only files with tasks?
+	cwd         string          // current working directory
 }
 
 func initialModel() model {
@@ -49,11 +52,18 @@ func initialModel() model {
 	ci.CharLimit = 100
 	ci.Width = 50
 
+	// Create tag input
+	tagi := textinput.New()
+	tagi.Placeholder = "Enter tag..."
+	tagi.CharLimit = 50
+	tagi.Width = 30
+
 	return model{
 		files:       files,
 		filtered:    files, // Initially show all files
 		search:      ti,
 		createInput: ci,
+		tagInput:    tagi,
 		cwd:         cwd,
 	}
 }
@@ -150,6 +160,74 @@ func getDailyNoteFilename() string {
 	today := time.Now().Format("2006-01-02")
 	return today + "-daily.md"
 }
+
+// Search for files containing a specific tag using ripgrep
+func searchTag(dir, tag string) ([]string, error) {
+	// Remove # if present at the start
+	tag = strings.TrimPrefix(tag, "#")
+	
+	// We'll search for the tag in different contexts:
+	// 1. Inline hashtag: #tag
+	// 2. In YAML frontmatter tags field (various formats)
+	//    - tags: [tag1, tag2]
+	//    - tags: ["tag1", "tag2"]  
+	//    - tags:
+	//      - tag1
+	//      - tag2
+	
+	// Run ripgrep with multiple patterns
+	cmd := exec.Command("rg", "-l", "--type", "md", 
+		"-e", fmt.Sprintf("#%s\\b", tag),                    // #tag with word boundary
+		"-e", fmt.Sprintf(`tags:.*\b%s\b`, tag),            // tags: line containing the tag
+		"-e", fmt.Sprintf(`^\s*-\s+%s\b`, tag),             // - tag in YAML lists
+		dir)
+	
+	output, err := cmd.Output()
+	if err != nil {
+		// Check if it's just "no matches found" (exit code 1)
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	
+	// Parse output - each line is a file path
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var files []string
+	for _, line := range lines {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	
+	return files, nil
+}
+
+// Search for files containing open tasks using ripgrep
+func searchTasks(dir string) ([]string, error) {
+	// Search for unchecked checkbox pattern: "- [ ]"
+	// Use -F for fixed strings and -- to stop flag parsing
+	cmd := exec.Command("rg", "-l", "--type", "md", "-F", "--", "- [ ]", dir)
+	output, err := cmd.Output()
+	if err != nil {
+		// Check if it's just "no matches found" (exit code 1)
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+	
+	// Parse output - each line is a file path
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	var files []string
+	for _, line := range lines {
+		if line != "" {
+			files = append(files, line)
+		}
+	}
+	
+	return files, nil
+}
 func (m model) Init() tea.Cmd {
 	return nil
 }
@@ -175,6 +253,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.createInput.SetValue("")
 				return m, nil
 			}
+			if m.tagMode {
+				// Exit tag mode on q
+				m.tagMode = false
+				m.tagInput.SetValue("")
+				m.filtered = m.files
+				m.cursor = 0
+				return m, nil
+			}
 			return m, tea.Quit
 
 		case "esc":
@@ -189,6 +275,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit create mode
 				m.createMode = false
 				m.createInput.SetValue("")
+			}
+			if m.tagMode {
+				// Exit tag mode
+				m.tagMode = false
+				m.tagInput.SetValue("")
+				m.filtered = m.files
+				m.cursor = 0
+			}
+			if m.taskFilter {
+				// Clear task filter
+				m.taskFilter = false
+				m.filtered = m.files
+				m.cursor = 0
 			}
 
 		case "ctrl+n":
@@ -222,25 +321,55 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "/":
-			if !m.createMode {
+			if !m.createMode && !m.tagMode {
 				// Enter search mode
 				m.searchMode = true
 				m.search.Focus()
 				return m, nil
 			}
 
+		case "#":
+			if !m.searchMode && !m.createMode && !m.tagMode {
+				// Enter tag search mode
+				m.tagMode = true
+				m.tagInput.Focus()
+				return m, nil
+			}
+
+		case "ctrl+t":
+			if !m.searchMode && !m.createMode && !m.tagMode {
+				// Search for tasks
+				if files, err := searchTasks(m.cwd); err == nil {
+					m.filtered = files
+					m.cursor = 0
+					m.taskFilter = true
+				}
+			}
+
 		case "up", "k":
-			if !m.searchMode && !m.createMode && m.cursor > 0 {
+			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor > 0 {
 				m.cursor--
 			}
 
 		case "down", "j":
-			if !m.searchMode && !m.createMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 			}
 
 		case "enter":
-			if m.createMode {
+			if m.tagMode {
+				// Search for the tag
+				tag := m.tagInput.Value()
+				if tag != "" {
+					if files, err := searchTag(m.cwd, tag); err == nil {
+						m.filtered = files
+						m.cursor = 0
+					}
+				}
+				// Exit tag mode
+				m.tagMode = false
+				m.tagInput.SetValue("")
+			} else if m.createMode {
 				// Create the new note
 				title := m.createInput.Value()
 				if title != "" {
@@ -280,21 +409,37 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.createInput, cmd = m.createInput.Update(msg)
 	}
 
+	// Handle tag input
+	if m.tagMode {
+		m.tagInput, cmd = m.tagInput.Update(msg)
+	}
+
 	return m, cmd
 }
 func (m model) View() string {
 	var s strings.Builder
 	
 	// Header
-	s.WriteString(fmt.Sprintf("Notes (%d files)\n\n", len(m.filtered)))
+	header := fmt.Sprintf("Notes (%d files)", len(m.filtered))
+	if m.taskFilter {
+		header += " - [Showing files with tasks]"
+	}
+	s.WriteString(header + "\n\n")
 
-	if m.createMode {
+	if m.tagMode {
+		// Tag search mode view
+		s.WriteString("Search by Tag\n\n")
+		s.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
+		s.WriteString("[Enter] search [Esc] cancel")
+	} else if m.createMode {
 		// Create mode view
 		s.WriteString("Create New Note\n\n")
 		s.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
 		s.WriteString("[Enter] create [Esc] cancel")
 	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
 		s.WriteString("No files match your search.\n\n")
+	} else if len(m.filtered) == 0 && !m.searchMode {
+		s.WriteString("No files found.\n\n")
 	} else if len(m.files) == 0 {
 		s.WriteString("No markdown files found.\n\n")
 	} else {
@@ -323,13 +468,13 @@ func (m model) View() string {
 	}
 
 	// Bottom help text
-	if !m.createMode {
+	if !m.createMode && !m.tagMode {
 		s.WriteString("\n")
 		if m.searchMode {
 			s.WriteString(fmt.Sprintf("Search: %s\n", m.search.View()))
 			s.WriteString("[Esc] cancel [Enter] select")
 		} else {
-			s.WriteString("[/] search [Enter] open [Ctrl+N] new [Ctrl+D] daily [q] quit")
+			s.WriteString("[/] search [#] tags [Ctrl+T] tasks [Ctrl+N] new [Ctrl+D] daily [q] quit")
 		}
 	}
 
