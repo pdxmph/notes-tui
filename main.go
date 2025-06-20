@@ -429,6 +429,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.previewMode = false
 				m.previewContent = ""
 				m.previewScroll = 0
+				m.selected = "" // Clear selected file to prevent editor opening on quit
 				return m, nil
 			
 			case "e", "ctrl+e":
