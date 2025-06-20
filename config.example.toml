@@ -1,0 +1,23 @@
+# Example configuration file for notes-tui
+# Copy this to ~/.config/notes-tui/config.toml and customize
+
+# Default directory for notes
+# If not set, uses current directory or ~/notes if it exists
+notes_directory = "/Users/mph/notes"
+
+# Editor command with arguments
+# Supports commands with spaces and arguments
+# If not set, falls back to $EDITOR environment variable
+editor = "emacsclient --create-frame --no-wait"
+
+# External preview command (optional)
+# Use tools like glow, bat, or any markdown viewer
+# If not set, Enter key uses internal preview
+# If set, Enter key uses this external command instead
+preview_command = "glow --style dark --pager"
+
+# Other example configurations:
+# editor = "code --wait"              # VS Code
+# editor = "vim"                      # Simple vim
+# preview_command = "bat --style=plain --color=always"  # bat with color
+# preview_command = "mdcat"           # mdcat viewer

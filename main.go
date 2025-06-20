@@ -12,7 +12,110 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/BurntSushi/toml"
 )
+
+// Config holds application configuration
+type Config struct {
+	NotesDirectory string `toml:"notes_directory"`
+	Editor         string `toml:"editor"`
+	PreviewCommand string `toml:"preview_command"`
+}
+
+// DefaultConfig returns a config with sensible defaults
+func DefaultConfig() Config {
+	homeDir, _ := os.UserHomeDir()
+	notesDir := filepath.Join(homeDir, "notes")
+	
+	// If ~/notes doesn't exist, use current directory
+	if _, err := os.Stat(notesDir); os.IsNotExist(err) {
+		cwd, _ := os.Getwd()
+		notesDir = cwd
+	}
+	
+	return Config{
+		NotesDirectory: notesDir,
+		Editor:         "", // Will fall back to $EDITOR
+		PreviewCommand: "", // Will use internal preview
+	}
+}
+
+// LoadConfig loads configuration from file with fallbacks
+func LoadConfig() Config {
+	config := DefaultConfig()
+	
+	// Try to find config file
+	configPath := getConfigPath()
+	if configPath == "" {
+		return config
+	}
+	
+	// Try to load and parse config file
+	if _, err := toml.DecodeFile(configPath, &config); err != nil {
+		// If config file has errors, fall back to defaults
+		// Could log this in the future
+		return DefaultConfig()
+	}
+	
+	return config
+}
+
+// getConfigPath returns the path to the config file, or empty string if not found
+func getConfigPath() string {
+	// Try XDG config dir first
+	if xdgConfig := os.Getenv("XDG_CONFIG_HOME"); xdgConfig != "" {
+		path := filepath.Join(xdgConfig, "notes-tui", "config.toml")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	
+	// Try ~/.config/notes-tui/config.toml
+	if homeDir, err := os.UserHomeDir(); err == nil {
+		path := filepath.Join(homeDir, ".config", "notes-tui", "config.toml")
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+	}
+	
+	return ""
+}
+
+// parseCommand splits a command string into command and args, handling quoted arguments
+func parseCommand(cmdStr string) (string, []string) {
+	if cmdStr == "" {
+		return "", nil
+	}
+	
+	// Simple parsing that handles quoted arguments
+	var parts []string
+	var current strings.Builder
+	inQuotes := false
+	
+	for i, r := range cmdStr {
+		switch {
+		case r == '"' && (i == 0 || cmdStr[i-1] != '\\'):
+			inQuotes = !inQuotes
+		case r == ' ' && !inQuotes:
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+	
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	
+	if len(parts) == 0 {
+		return "", nil
+	}
+	
+	return parts[0], parts[1:]
+}
 
 type model struct {
 	files       []string        // all markdown files
@@ -31,6 +134,7 @@ type model struct {
 	cwd         string          // current working directory
 	width       int             // terminal width
 	height      int             // terminal height
+	config      Config          // application configuration
 	// Preview popover state
 	previewMode    bool            // are we showing preview popover?
 	previewContent string          // content for preview popover
@@ -49,10 +153,18 @@ type clearSelectedMsg struct{}
 
 
 func initialModel() model {
-	// Get the current working directory
-	cwd, err := os.Getwd()
-	if err != nil {
-		log.Fatal(err)
+	// Load configuration
+	config := LoadConfig()
+	
+	// Use configured notes directory
+	cwd := config.NotesDirectory
+	if cwd == "" {
+		// Fallback to current working directory
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 	
 	files, err := findMarkdownFiles(cwd)
@@ -85,6 +197,7 @@ func initialModel() model {
 		createInput: ci,
 		tagInput:    tagi,
 		cwd:         cwd,
+		config:      config,
 	}
 }
 
@@ -759,12 +872,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit search mode on enter
 				m.searchMode = false
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
-				// Show preview popover
+				// Preview: use external if configured, otherwise internal
 				m.selected = m.filtered[m.cursor]
-				m.previewFile = m.selected
-				m.previewMode = true
-				m.previewScroll = 0
-				return m, m.loadPreviewForPopover()
+				if m.config.PreviewCommand != "" {
+					// Use external preview
+					return m, tea.ExecProcess(m.openInPreview(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				} else {
+					// Use internal preview popover
+					m.previewFile = m.selected
+					m.previewMode = true
+					m.previewScroll = 0
+					return m, m.loadPreviewForPopover()
+				}
 			}
 		}
 	}
@@ -793,23 +914,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // Open file in external editor
 func (m model) openInEditor() *exec.Cmd {
-	editor := os.Getenv("EDITOR")
-	if editor == "" {
-		// Try common editors
-		editors := []string{"vim", "nvim", "emacs", "nano"}
-		for _, e := range editors {
-			if _, err := exec.LookPath(e); err == nil {
-				editor = e
-				break
+	var editor string
+	var args []string
+	
+	// Use configured editor first
+	if m.config.Editor != "" {
+		editor, args = parseCommand(m.config.Editor)
+	} else {
+		// Fall back to $EDITOR environment variable
+		editor = os.Getenv("EDITOR")
+		if editor == "" {
+			// Try common editors as last resort
+			editors := []string{"vim", "nvim", "emacs", "nano"}
+			for _, e := range editors {
+				if _, err := exec.LookPath(e); err == nil {
+					editor = e
+					break
+				}
 			}
 		}
 	}
 	
 	if editor == "" {
-		editor = "vi" // fallback
+		editor = "vi" // ultimate fallback
 	}
 	
-	cmd := exec.Command(editor, m.selected)
+	// Add the filename to the arguments
+	args = append(args, m.selected)
+	
+	cmd := exec.Command(editor, args...)
+	return cmd
+}
+
+// Open file in external preview command
+func (m model) openInPreview() *exec.Cmd {
+	if m.config.PreviewCommand == "" {
+		return nil
+	}
+	
+	command, args := parseCommand(m.config.PreviewCommand)
+	if command == "" {
+		return nil
+	}
+	
+	// Add the filename to the arguments
+	args = append(args, m.selected)
+	
+	cmd := exec.Command(command, args...)
 	return cmd
 }
 func (m model) View() string {
@@ -976,11 +1127,24 @@ func (m model) renderPreviewPopover() string {
 }
 
 func main() {
-	// If a directory is specified as an argument, change to it
+	// Load config first
+	config := LoadConfig()
+	
+	// If a directory is specified as an argument, it overrides config
 	if len(os.Args) > 1 {
 		dir := os.Args[1]
 		if err := os.Chdir(dir); err != nil {
 			log.Fatal(err)
+		}
+		// Update config to use the specified directory
+		if cwd, err := os.Getwd(); err == nil {
+			config.NotesDirectory = cwd
+		}
+	} else if config.NotesDirectory != "" {
+		// Use configured directory
+		if err := os.Chdir(config.NotesDirectory); err != nil {
+			log.Printf("Warning: Could not change to configured directory %s: %v", config.NotesDirectory, err)
+			// Continue with current directory
 		}
 	}
 
@@ -990,28 +1154,40 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// If a file was selected, open it in $EDITOR
+	// If a file was selected, open it in editor
 	if m, ok := m.(model); ok && m.selected != "" {
-		editor := os.Getenv("EDITOR")
-		if editor == "" {
-			// Try common editors
-			editors := []string{"vim", "nvim", "nano", "emacs", "code"}
-			for _, e := range editors {
-				if _, err := exec.LookPath(e); err == nil {
-					editor = e
-					break
+		var editor string
+		var args []string
+		
+		// Use configured editor first
+		if m.config.Editor != "" {
+			editor, args = parseCommand(m.config.Editor)
+		} else {
+			// Fall back to $EDITOR environment variable
+			editor = os.Getenv("EDITOR")
+			if editor == "" {
+				// Try common editors as last resort
+				editors := []string{"vim", "nvim", "nano", "emacs", "code"}
+				for _, e := range editors {
+					if _, err := exec.LookPath(e); err == nil {
+						editor = e
+						break
+					}
 				}
 			}
 		}
 		
 		if editor == "" {
-			fmt.Println("No editor found. Please set $EDITOR environment variable.")
+			fmt.Println("No editor found. Please set $EDITOR environment variable or configure editor in config file.")
 			fmt.Printf("Selected file: %s\n", m.selected)
 			return
 		}
 
+		// Add the filename to the arguments
+		args = append(args, m.selected)
+
 		// Open the file in the editor
-		cmd := exec.Command(editor, m.selected)
+		cmd := exec.Command(editor, args...)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
