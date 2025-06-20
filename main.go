@@ -11,6 +11,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/lipgloss"
 )
 
 type model struct {
@@ -26,6 +28,9 @@ type model struct {
 	tagInput    textinput.Model // tag search input
 	taskFilter  bool            // are we showing only files with tasks?
 	cwd         string          // current working directory
+	previewContent string       // content of the currently selected file
+	width       int             // terminal width
+	height      int             // terminal height
 }
 
 func initialModel() model {
@@ -229,13 +234,54 @@ func searchTasks(dir string) ([]string, error) {
 	return files, nil
 }
 func (m model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(
+		tea.WindowSize(),
+		m.loadPreview(),
+	)
+}
+
+// Load the content of the selected file
+func (m *model) loadPreview() tea.Cmd {
+	return func() tea.Msg {
+		if m.cursor >= len(m.filtered) || m.cursor < 0 {
+			return nil
+		}
+		
+		filepath := m.filtered[m.cursor]
+		content, err := os.ReadFile(filepath)
+		if err != nil {
+			m.previewContent = fmt.Sprintf("Error reading file: %v", err)
+			return nil
+		}
+		
+		// Render markdown with glamour
+		renderer, _ := glamour.NewTermRenderer(
+			glamour.WithAutoStyle(),
+			glamour.WithWordWrap(m.width * 60 / 100), // 60% of terminal width
+		)
+		
+		rendered, err := renderer.Render(string(content))
+		if err != nil {
+			m.previewContent = string(content) // Fall back to raw content
+		} else {
+			m.previewContent = rendered
+		}
+		
+		return nil
+	}
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
+	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		// Reload preview with new width
+		return m, m.loadPreview()
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q":
@@ -245,7 +291,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				return m, nil
+				return m, m.loadPreview()
 			}
 			if m.createMode {
 				// Exit create mode on q
@@ -259,9 +305,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
-				return m, nil
+				return m, m.loadPreview()
 			}
 			return m, tea.Quit
+
+		case "e", "ctrl+e":
+			// Open in external editor
+			if m.cursor < len(m.filtered) {
+				m.selected = m.filtered[m.cursor]
+				// We'll handle the actual editor opening after we return
+				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+					return m.loadPreview()
+				})
+			}
 
 		case "esc":
 			if m.searchMode {
@@ -270,6 +326,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				cmds = append(cmds, m.loadPreview())
 			}
 			if m.createMode {
 				// Exit create mode
@@ -282,12 +339,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				cmds = append(cmds, m.loadPreview())
 			}
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				cmds = append(cmds, m.loadPreview())
 			}
 
 		case "ctrl+n":
@@ -311,12 +370,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					content := fmt.Sprintf("# Daily Note - %s\n\n## Tasks\n\n## Notes\n\n", today)
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
-						return m, tea.Quit
+						// Refresh file list to include new file
+						files, _ := findMarkdownFiles(m.cwd)
+						m.files = files
+						m.filtered = files
+						// Find and select the new file
+						for i, f := range m.filtered {
+							if f == fullPath {
+								m.cursor = i
+								break
+							}
+						}
+						return m, m.loadPreview()
 					}
 				} else {
 					// File exists, just open it
 					m.selected = fullPath
-					return m, tea.Quit
+					// Find and select the file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					return m, m.loadPreview()
 				}
 			}
 
@@ -343,17 +420,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.filtered = files
 					m.cursor = 0
 					m.taskFilter = true
+					cmds = append(cmds, m.loadPreview())
 				}
 			}
 
 		case "up", "k":
 			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor > 0 {
 				m.cursor--
+				cmds = append(cmds, m.loadPreview())
 			}
 
 		case "down", "j":
 			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
+				cmds = append(cmds, m.loadPreview())
 			}
 
 		case "enter":
@@ -364,6 +444,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if files, err := searchTag(m.cwd, tag); err == nil {
 						m.filtered = files
 						m.cursor = 0
+						cmds = append(cmds, m.loadPreview())
 					}
 				}
 				// Exit tag mode
@@ -380,7 +461,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					content := fmt.Sprintf("# %s\n\n", title)
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
-						return m, tea.Quit
+						// Refresh file list to include new file
+						files, _ := findMarkdownFiles(m.cwd)
+						m.files = files
+						m.filtered = files
+						// Find and select the new file
+						for i, f := range m.filtered {
+							if f == fullPath {
+								m.cursor = i
+								break
+							}
+						}
+						// Exit create mode
+						m.createMode = false
+						m.createInput.SetValue("")
+						return m, m.loadPreview()
 					}
 				}
 				// Exit create mode
@@ -391,7 +486,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchMode = false
 			} else if m.cursor < len(m.filtered) {
 				m.selected = m.filtered[m.cursor]
-				return m, tea.Quit
+				return m, m.loadPreview()
 			}
 		}
 	}
@@ -401,7 +496,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.search, cmd = m.search.Update(msg)
 		query := m.search.Value()
 		m.filtered = filterFiles(m.files, query)
+		oldCursor := m.cursor
 		m.cursor = 0 // Reset cursor when filtering
+		if oldCursor != m.cursor && len(m.filtered) > 0 {
+			cmds = append(cmds, cmd, m.loadPreview())
+		} else {
+			cmds = append(cmds, cmd)
+		}
 	}
 
 	// Handle create input
@@ -414,37 +515,80 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tagInput, cmd = m.tagInput.Update(msg)
 	}
 
-	return m, cmd
+	return m, tea.Batch(cmds...)
+}
+
+// Open file in external editor
+func (m model) openInEditor() *exec.Cmd {
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		// Try common editors
+		editors := []string{"vim", "nvim", "emacs", "nano"}
+		for _, e := range editors {
+			if _, err := exec.LookPath(e); err == nil {
+				editor = e
+				break
+			}
+		}
+	}
+	
+	if editor == "" {
+		editor = "vi" // fallback
+	}
+	
+	cmd := exec.Command(editor, m.selected)
+	return cmd
 }
 func (m model) View() string {
-	var s strings.Builder
+	if m.width == 0 || m.height == 0 {
+		return "Loading..."
+	}
+
+	// Calculate pane widths
+	leftWidth := m.width * 40 / 100
+	rightWidth := m.width - leftWidth - 1 // -1 for border
+
+	// Create styles
+	leftPaneStyle := lipgloss.NewStyle().
+		Width(leftWidth).
+		Height(m.height - 1) // -1 for status line
+
+	rightPaneStyle := lipgloss.NewStyle().
+		Width(rightWidth).
+		Height(m.height - 1).
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderLeft(true).
+		Padding(1)
+
+	// Build left pane (file list)
+	var leftPane strings.Builder
 	
 	// Header
 	header := fmt.Sprintf("Notes (%d files)", len(m.filtered))
 	if m.taskFilter {
-		header += " - [Showing files with tasks]"
+		header += " - [Tasks]"
 	}
-	s.WriteString(header + "\n\n")
+	leftPane.WriteString(header + "\n\n")
 
 	if m.tagMode {
-		// Tag search mode view
-		s.WriteString("Search by Tag\n\n")
-		s.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
-		s.WriteString("[Enter] search [Esc] cancel")
+		// Tag search mode
+		leftPane.WriteString("Search by Tag\n\n")
+		leftPane.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
+		leftPane.WriteString("[Enter] search [Esc] cancel")
 	} else if m.createMode {
-		// Create mode view
-		s.WriteString("Create New Note\n\n")
-		s.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
-		s.WriteString("[Enter] create [Esc] cancel")
+		// Create mode
+		leftPane.WriteString("Create New Note\n\n")
+		leftPane.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
+		leftPane.WriteString("[Enter] create [Esc] cancel")
 	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
-		s.WriteString("No files match your search.\n\n")
+		leftPane.WriteString("No files match your search.\n\n")
 	} else if len(m.filtered) == 0 && !m.searchMode {
-		s.WriteString("No files found.\n\n")
+		leftPane.WriteString("No files found.\n\n")
 	} else if len(m.files) == 0 {
-		s.WriteString("No markdown files found.\n\n")
+		leftPane.WriteString("No markdown files found.\n\n")
 	} else {
 		// Show file list
-		maxVisible := 20 // Show max 20 files to leave room for search
+		maxVisible := m.height - 7 // Leave room for header and bottom help
 		startIdx := 0
 		
 		// Adjust view window if cursor is outside
@@ -459,26 +603,52 @@ func (m model) View() string {
 			}
 			
 			displayName := getDisplayName(m.filtered[i], m.cwd)
-			s.WriteString(fmt.Sprintf("%s%s\n", cursor, displayName))
+			// Truncate if too long for left pane
+			maxLen := leftWidth - 3
+			if len(displayName) > maxLen {
+				displayName = displayName[:maxLen-3] + "..."
+			}
+			leftPane.WriteString(fmt.Sprintf("%s%s\n", cursor, displayName))
 		}
 		
 		if len(m.filtered) > maxVisible {
-			s.WriteString(fmt.Sprintf("\n... and %d more files\n", len(m.filtered)-maxVisible))
+			remaining := len(m.filtered) - startIdx - maxVisible
+			if remaining > 0 {
+				leftPane.WriteString(fmt.Sprintf("\n... %d more\n", remaining))
+			}
 		}
 	}
 
-	// Bottom help text
+	// Add search field at bottom of left pane
+	leftPane.WriteString("\n")
+	if m.searchMode {
+		leftPane.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
+	}
+
+	// Build right pane (preview)
+	rightPane := m.previewContent
+	if rightPane == "" {
+		rightPane = "Select a file to preview\n\nPress Enter to preview\nPress e to edit in external editor"
+	}
+
+	// Combine panes
+	combined := lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		leftPaneStyle.Render(leftPane.String()),
+		rightPaneStyle.Render(rightPane),
+	)
+
+	// Add status line at bottom
+	statusLine := "\n"
 	if !m.createMode && !m.tagMode {
-		s.WriteString("\n")
 		if m.searchMode {
-			s.WriteString(fmt.Sprintf("Search: %s\n", m.search.View()))
-			s.WriteString("[Esc] cancel [Enter] select")
+			statusLine = "[Esc] cancel | [Enter] preview"
 		} else {
-			s.WriteString("[/] search [#] tags [Ctrl+T] tasks [Ctrl+N] new [Ctrl+D] daily [q] quit")
+			statusLine = "[/] search | [#] tags | [Ctrl+T] tasks | [Ctrl+N] new | [Ctrl+D] daily | [e] edit | [q] quit"
 		}
 	}
 
-	return s.String()
+	return combined + "\n" + statusLine
 }
 
 func main() {
