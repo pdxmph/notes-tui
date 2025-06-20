@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -156,7 +157,7 @@ type previewLoadedMsg struct {
 type clearSelectedMsg struct{}
 
 
-func initialModel() model {
+func initialModel(startupTag string) model {
 	// Load configuration
 	config := LoadConfig()
 	
@@ -194,7 +195,7 @@ func initialModel() model {
 	tagi.CharLimit = 50
 	tagi.Width = 30
 
-	return model{
+	m := model{
 		files:       files,
 		filtered:    files, // Initially show all files
 		search:      ti,
@@ -203,6 +204,17 @@ func initialModel() model {
 		cwd:         cwd,
 		config:      config,
 	}
+
+	// If a startup tag was provided, apply tag filter
+	if startupTag != "" {
+		if tagFiles, err := searchTag(cwd, startupTag); err == nil {
+			m.filtered = tagFiles
+			m.tagFilter = true
+			m.cursor = 0
+		}
+	}
+
+	return m
 }
 
 func findMarkdownFiles(dir string) ([]string, error) {
@@ -1173,12 +1185,17 @@ func (m model) renderPreviewPopover() string {
 }
 
 func main() {
+	// Parse command line flags
+	var tag = flag.String("tag", "", "Filter notes by tag (e.g., --tag=@mikeh)")
+	flag.Parse()
+
 	// Load config first
 	config := LoadConfig()
 	
-	// If a directory is specified as an argument, it overrides config
-	if len(os.Args) > 1 {
-		dir := os.Args[1]
+	// Handle directory argument (remaining args after flags)
+	args := flag.Args()
+	if len(args) > 0 {
+		dir := args[0]
 		if err := os.Chdir(dir); err != nil {
 			log.Fatal(err)
 		}
@@ -1194,7 +1211,7 @@ func main() {
 		}
 	}
 
-	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(*tag), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		log.Fatal(err)
