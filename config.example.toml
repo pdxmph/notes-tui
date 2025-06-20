@@ -16,6 +16,11 @@ editor = "emacsclient --create-frame --no-wait"
 # If set, Enter key uses this external command instead
 preview_command = "glow --style dark --pager"
 
+# Add YAML frontmatter to new notes (optional)
+# If true, new notes get frontmatter with title and date
+# If false or not set, new notes use simple markdown headers
+add_frontmatter = false
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim

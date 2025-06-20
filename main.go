@@ -20,6 +20,7 @@ type Config struct {
 	NotesDirectory string `toml:"notes_directory"`
 	Editor         string `toml:"editor"`
 	PreviewCommand string `toml:"preview_command"`
+	AddFrontmatter bool   `toml:"add_frontmatter"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -37,6 +38,7 @@ func DefaultConfig() Config {
 		NotesDirectory: notesDir,
 		Editor:         "", // Will fall back to $EDITOR
 		PreviewCommand: "", // Will use internal preview
+		AddFrontmatter: false, // Default to simple markdown headers
 	}
 }
 
@@ -286,6 +288,18 @@ func titleToFilename(title string) string {
 	}
 	
 	return cleaned + ".md"
+}
+
+// Generate note content based on configuration
+func generateNoteContent(title string, config Config) string {
+	if config.AddFrontmatter {
+		// YAML frontmatter format
+		today := time.Now().Format("2006-01-02")
+		return fmt.Sprintf("---\ntitle: %s\ndate: %s\n---\n\n", title, today)
+	} else {
+		// Simple markdown header format
+		return fmt.Sprintf("# %s\n\n", title)
+	}
 }
 
 // Get today's daily note filename
@@ -839,8 +853,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					filename := titleToFilename(title)
 					fullPath := filepath.Join(m.cwd, filename)
 					
-					// Create the file with the title as the first line
-					content := fmt.Sprintf("# %s\n\n", title)
+					// Create the file with templated content
+					content := generateNoteContent(title, m.config)
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
 						// Refresh file list to include new file
