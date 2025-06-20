@@ -26,6 +26,8 @@ type model struct {
 	tagMode     bool            // are we in tag search mode?
 	tagInput    textinput.Model // tag search input
 	taskFilter  bool            // are we showing only files with tasks?
+	deleteMode  bool            // are we in delete confirmation mode?
+	deleteFile  string          // file to be deleted
 	cwd         string          // current working directory
 	width       int             // terminal width
 	height      int             // terminal height
@@ -515,11 +517,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 				return m, nil
 			}
+			if m.deleteMode {
+				// Exit delete mode on q
+				m.deleteMode = false
+				m.deleteFile = ""
+				return m, nil
+			}
 			return m, tea.Quit
 
 		case "e", "ctrl+e":
 			// Open in external editor
-			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered) {
 				m.selected = m.filtered[m.cursor]
 				// We'll handle the actual editor opening after we return
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
@@ -547,6 +555,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.deleteMode {
+				// Exit delete mode
+				m.deleteMode = false
+				m.deleteFile = ""
+			}
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
@@ -555,7 +568,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+n":
-			if !m.searchMode && !m.createMode {
+			if !m.searchMode && !m.createMode && !m.deleteMode {
 				// Enter create mode
 				m.createMode = true
 				m.createInput.Focus()
@@ -563,7 +576,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+d":
-			if !m.searchMode && !m.createMode {
+			if !m.searchMode && !m.createMode && !m.deleteMode {
 				// Create or open daily note
 				filename := getDailyNoteFilename()
 				fullPath := filepath.Join(m.cwd, filename)
@@ -607,7 +620,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "/":
-			if !m.createMode && !m.tagMode {
+			if !m.createMode && !m.tagMode && !m.deleteMode {
 				// Enter search mode
 				m.searchMode = true
 				m.search.Focus()
@@ -615,7 +628,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "#":
-			if !m.searchMode && !m.createMode && !m.tagMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
 				// Enter tag search mode
 				m.tagMode = true
 				m.tagInput.Focus()
@@ -623,7 +636,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+t":
-			if !m.searchMode && !m.createMode && !m.tagMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
 				// Search for tasks
 				if files, err := searchTasks(m.cwd); err == nil {
 					m.filtered = files
@@ -632,20 +645,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "d":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered) {
+				// Enter delete confirmation mode
+				m.deleteMode = true
+				m.deleteFile = m.filtered[m.cursor]
+			}
+
+		case "y":
+			if m.deleteMode {
+				// Confirm deletion
+				if err := os.Remove(m.deleteFile); err == nil {
+					// Successfully deleted, refresh file list
+					files, _ := findMarkdownFiles(m.cwd)
+					m.files = files
+					
+					// If we had filters applied, reapply them
+					if m.taskFilter {
+						if taskFiles, err := searchTasks(m.cwd); err == nil {
+							m.filtered = taskFiles
+						} else {
+							m.filtered = files
+						}
+					} else if m.search.Value() != "" {
+						m.filtered = filterFiles(files, m.search.Value())
+					} else {
+						m.filtered = files
+					}
+					
+					// Adjust cursor position
+					if m.cursor >= len(m.filtered) {
+						if len(m.filtered) > 0 {
+							m.cursor = len(m.filtered) - 1
+						} else {
+							m.cursor = 0
+						}
+					}
+				}
+				// Exit delete mode regardless of success/failure
+				m.deleteMode = false
+				m.deleteFile = ""
+			}
+
+		case "n":
+			if m.deleteMode {
+				// Cancel deletion
+				m.deleteMode = false
+				m.deleteFile = ""
+			}
+
 		case "up", "k":
-			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor > 0 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor > 0 {
 				m.cursor--
 				// Don't auto-load preview on cursor movement
 			}
 
 		case "down", "j":
-			if !m.searchMode && !m.createMode && !m.tagMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 				// Don't auto-load preview on cursor movement
 			}
 
 		case "enter":
-			if m.tagMode {
+			if m.deleteMode {
+				// Don't delete on enter - require explicit 'y' confirmation
+				return m, nil
+			} else if m.tagMode {
 				// Search for the tag
 				tag := m.tagInput.Value()
 				if tag != "" {
@@ -693,7 +758,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.searchMode {
 				// Exit search mode on enter
 				m.searchMode = false
-			} else if m.cursor < len(m.filtered) {
+			} else if !m.deleteMode && m.cursor < len(m.filtered) {
 				// Show preview popover
 				m.selected = m.filtered[m.cursor]
 				m.previewFile = m.selected
@@ -787,6 +852,12 @@ func (m model) View() string {
 		content.WriteString("Create New Note\n\n")
 		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
 		content.WriteString("[Enter] create [Esc] cancel")
+	} else if m.deleteMode {
+		// Delete confirmation mode
+		filename := getDisplayName(m.deleteFile, m.cwd)
+		content.WriteString("Delete Note\n\n")
+		content.WriteString(fmt.Sprintf("Delete '%s'?\n\n", filename))
+		content.WriteString("[y] yes [n] no [Esc] cancel")
 	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
 		content.WriteString("No files match your search.\n\n")
 	} else if len(m.filtered) == 0 && !m.searchMode {
@@ -827,14 +898,14 @@ func (m model) View() string {
 	}
 
 	// Add search field at bottom
-	if !m.tagMode && !m.createMode {
+	if !m.tagMode && !m.createMode && !m.deleteMode {
 		content.WriteString("\n")
 		if m.searchMode {
 			content.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [Ctrl+n] new  [Ctrl+D] daily  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [d] delete  [Ctrl+n] new  [Ctrl+D] daily  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
