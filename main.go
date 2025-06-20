@@ -352,6 +352,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.search.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				m.lastPreviewedFile = "" // Clear preview cache
 				cmds = append(cmds, m.loadPreview())
 			}
 			if m.createMode {
@@ -365,6 +366,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.tagInput.SetValue("")
 				m.filtered = m.files
 				m.cursor = 0
+				m.lastPreviewedFile = "" // Clear preview cache
 				cmds = append(cmds, m.loadPreview())
 			}
 			if m.taskFilter {
@@ -372,6 +374,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				m.lastPreviewedFile = "" // Clear preview cache
 				cmds = append(cmds, m.loadPreview())
 			}
 
@@ -446,6 +449,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.filtered = files
 					m.cursor = 0
 					m.taskFilter = true
+					m.lastPreviewedFile = "" // Clear preview cache
 					cmds = append(cmds, m.loadPreview())
 				}
 			}
@@ -470,6 +474,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if files, err := searchTag(m.cwd, tag); err == nil {
 						m.filtered = files
 						m.cursor = 0
+						m.lastPreviewedFile = "" // Clear preview cache
 						cmds = append(cmds, m.loadPreview())
 					}
 				}
@@ -522,13 +527,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.search, cmd = m.search.Update(msg)
 		query := m.search.Value()
 		m.filtered = filterFiles(m.files, query)
-		oldCursor := m.cursor
 		m.cursor = 0 // Reset cursor when filtering
-		if oldCursor != m.cursor && len(m.filtered) > 0 {
-			cmds = append(cmds, cmd, m.loadPreview())
-		} else {
-			cmds = append(cmds, cmd)
-		}
+		m.lastPreviewedFile = "" // Clear preview cache so Enter will load the new file
+		cmds = append(cmds, cmd)
 	}
 
 	// Handle create input
