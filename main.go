@@ -42,6 +42,10 @@ type previewLoadedMsg struct {
 	filepath string
 }
 
+// Message to clear selected file state
+type clearSelectedMsg struct{}
+
+
 func initialModel() model {
 	// Get the current working directory
 	cwd, err := os.Getwd()
@@ -421,6 +425,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.previewContent = msg.content
 		return m, nil
 
+	case clearSelectedMsg:
+		m.selected = ""
+		return m, nil
+
+
 	case tea.KeyMsg:
 		// Handle preview mode separately
 		if m.previewMode {
@@ -439,7 +448,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.previewScroll = 0
 				m.selected = m.previewFile
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-					return nil
+					return clearSelectedMsg{}
 				})
 			
 			case "up", "k":
@@ -514,7 +523,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = m.filtered[m.cursor]
 				// We'll handle the actual editor opening after we return
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-					return nil
+					return clearSelectedMsg{}
 				})
 			}
 
@@ -577,7 +586,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								break
 							}
 						}
-						return m, nil
+						return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+							return clearSelectedMsg{}
+						})
 					}
 				} else {
 					// File exists, just open it
@@ -589,7 +600,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							break
 						}
 					}
-					return m, nil
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
 				}
 			}
 
@@ -666,10 +679,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								break
 							}
 						}
-						// Exit create mode
+						// Exit create mode and open editor
 						m.createMode = false
 						m.createInput.SetValue("")
-						return m, nil
+						return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+							return clearSelectedMsg{}
+						})
 					}
 				}
 				// Exit create mode
@@ -819,7 +834,7 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [Ctrl+N] new  [Ctrl+D] daily  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [Ctrl+n] new  [Ctrl+D] daily  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
