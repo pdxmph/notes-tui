@@ -86,11 +86,11 @@ preview_command = "mdcat"                                   # mdcat viewer
 - **`/`**: Search files
 - **`Enter`**: Preview (internal popover or external command if configured)
 - **`e`**: Edit in configured editor
-- **`d`**: Delete file (with confirmation)
-- **`Ctrl+N`**: Create new note
-- **`Ctrl+D`**: Create/open daily note
+- **`X`**: Delete file (with confirmation)
+- **`n`**: Create new note
+- **`d`**: Create/open daily note
 - **`#`**: Search by tag
-- **`Ctrl+T`**: Show files with open tasks
+- **`t`**: Show files with open tasks
 - **`q`**: Quit
 
 ### In Preview Mode
@@ -106,12 +106,12 @@ preview_command = "mdcat"                                   # mdcat viewer
 
 - **File search** (`/`): Fuzzy search by filename
 - **Tag search** (`#`): Find files containing hashtags in content or YAML frontmatter
-- **Task search** (`Ctrl+T`): Find files with open `- [ ]` checkboxes
+- **Task search** (`t`): Find files with open `- [ ]` checkboxes
 
 ### Note Creation
 
-- **Regular notes** (`Ctrl+N`): Creates `title-in-kebab-case.md`
-- **Daily notes** (`Ctrl+D`): Creates `YYYY-MM-DD-daily.md` with template
+- **Regular notes** (`n`): Creates `title-in-kebab-case.md`
+- **Daily notes** (`d`): Creates `YYYY-MM-DD-daily.md` with template
 
 ### Tag Support
 

@@ -680,16 +680,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			}
 
-		case "ctrl+n":
-			if !m.searchMode && !m.createMode && !m.deleteMode {
+		case "n":
+			if m.deleteMode {
+				// Cancel deletion
+				m.deleteMode = false
+				m.deleteFile = ""
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
 				// Enter create mode
 				m.createMode = true
 				m.createInput.Focus()
 				return m, nil
 			}
 
-		case "ctrl+d":
-			if !m.searchMode && !m.createMode && !m.deleteMode {
+		case "d":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
 				// Create or open daily note
 				filename := getDailyNoteFilename()
 				fullPath := filepath.Join(m.cwd, filename)
@@ -748,7 +752,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "ctrl+t":
+		case "t":
 			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
 				// Search for tasks
 				if files, err := searchTasks(m.cwd); err == nil {
@@ -758,7 +762,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "d":
+		case "X":
 			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered) {
 				// Enter delete confirmation mode
 				m.deleteMode = true
@@ -796,13 +800,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 				}
 				// Exit delete mode regardless of success/failure
-				m.deleteMode = false
-				m.deleteFile = ""
-			}
-
-		case "n":
-			if m.deleteMode {
-				// Cancel deletion
 				m.deleteMode = false
 				m.deleteFile = ""
 			}
@@ -1056,7 +1053,7 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [d] delete  [Ctrl+n] new  [Ctrl+D] daily  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [t] tasks  [#] tags  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
