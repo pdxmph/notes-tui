@@ -126,10 +126,12 @@ type model struct {
 	selected    string          // selected file
 	searchMode  bool            // are we in search mode?
 	search      textinput.Model // search input
+	textFilter  bool            // are we showing only files matching text search?
 	createMode  bool            // are we in create mode?
 	createInput textinput.Model // create note input
 	tagMode     bool            // are we in tag search mode?
 	tagInput    textinput.Model // tag search input
+	tagFilter   bool            // are we showing only files with a specific tag?
 	taskFilter  bool            // are we showing only files with tasks?
 	deleteMode  bool            // are we in delete confirmation mode?
 	deleteFile  string          // file to be deleted
@@ -693,6 +695,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.tagFilter {
+				// Clear tag filter
+				m.tagFilter = false
+				m.filtered = m.files
+				m.cursor = 0
+			}
+			if m.textFilter {
+				// Clear text filter
+				m.textFilter = false
+				m.filtered = m.files
+				m.cursor = 0
+			}
 
 		case "n":
 			if m.deleteMode {
@@ -773,6 +787,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.filtered = files
 					m.cursor = 0
 					m.taskFilter = true
+					m.tagFilter = false // Clear tag filter when switching to task filter
+					m.textFilter = false // Clear text filter when switching to task filter
 				}
 			}
 
@@ -841,6 +857,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if files, err := searchTag(m.cwd, tag); err == nil {
 						m.filtered = files
 						m.cursor = 0
+						m.tagFilter = true // Set tag filter active
+						m.taskFilter = false // Clear task filter when switching to tag filter
+						m.textFilter = false // Clear text filter when switching to tag filter
 					}
 				}
 				// Exit tag mode
@@ -880,8 +899,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.createMode = false
 				m.createInput.SetValue("")
 			} else if m.searchMode {
-				// Exit search mode on enter
+				// Exit search mode on enter, but keep the filter active
 				m.searchMode = false
+				// If there's a search query, mark text filter as active
+				if m.search.Value() != "" {
+					m.textFilter = true
+					m.taskFilter = false // Clear other filters
+					m.tagFilter = false
+				}
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
 				// Preview: use external if configured, otherwise internal
 				m.selected = m.filtered[m.cursor]
@@ -907,6 +932,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		query := m.search.Value()
 		m.filtered = filterFiles(m.files, query)
 		m.cursor = 0 // Reset cursor when filtering
+		// Clear other filters when doing a text search
+		m.taskFilter = false
+		m.tagFilter = false
+		m.textFilter = false // Also clear text filter since we're in live search mode
 		cmds = append(cmds, cmd)
 	}
 
@@ -1001,6 +1030,12 @@ func (m model) View() string {
 	header := fmt.Sprintf("Notes (%d files)", len(m.filtered))
 	if m.taskFilter {
 		header += " - [Tasks]"
+	}
+	if m.tagFilter {
+		header += " - [Tag]"
+	}
+	if m.textFilter {
+		header += " - [Search]"
 	}
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
 
