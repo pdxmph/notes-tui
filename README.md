@@ -7,7 +7,7 @@ A lightweight Notational Velocity-style TUI for markdown notes built with Go and
 - **Fast file browsing** with fuzzy search
 - **Instant note creation** with title-to-filename conversion
 - **Daily notes** with special handling for `yyyy-mm-dd-daily.md` files
-- **Tag search** using `#tag` syntax in content and YAML frontmatter
+- **Tag search** using `#tag` syntax in content and YAML front matter
 - **Task search** to find open `- [ ]` checkboxes
 - **Dual preview modes**: internal popover and external command
 - **Configurable** directory, editor, and preview commands
@@ -41,7 +41,7 @@ notes-tui /path/to/notes
 
 Create a config file at `~/.config/notes-tui/config.toml`:
 
-```toml
+````toml
 # Default directory for notes
 notes_directory = "/Users/mph/notes"
 
@@ -50,7 +50,6 @@ editor = "emacsclient --create-frame --no-wait"
 
 # External preview command (optional)
 preview_command = "glow --style dark --pager"
-```
 
 See `config.example.toml` for more examples.
 
@@ -64,10 +63,10 @@ See `config.example.toml` for more examples.
 
 ```toml
 editor = "emacsclient --create-frame --no-wait"  # Emacs
-editor = "code --wait"                            # VS Code  
+editor = "code --wait"                            # VS Code
 editor = "vim"                                    # Vim
 editor = "subl --wait"                            # Sublime Text
-```
+````
 
 ### Preview Examples
 
@@ -105,7 +104,7 @@ preview_command = "mdcat"                                   # mdcat viewer
 ### Search Modes
 
 - **File search** (`/`): Fuzzy search by filename
-- **Tag search** (`#`): Find files containing hashtags in content or YAML frontmatter
+- **Tag search** (`#`): Find files containing hashtags in content or YAML front matter
 - **Task search** (`t`): Find files with open `- [ ]` checkboxes
 
 ### Note Creation
@@ -116,7 +115,8 @@ preview_command = "mdcat"                                   # mdcat viewer
 ### Tag Support
 
 Finds tags in multiple formats:
-- Inline: `#tag` 
+
+- Inline: `#tag`
 - YAML frontmatter: `tags: [tag1, tag2]`
 - YAML lists:
   ```yaml
@@ -133,8 +133,9 @@ Finds tags in multiple formats:
 ## Development
 
 The tool is designed to be simple and fast:
+
 - Single Go binary
-- No database dependencies  
+- No database dependencies
 - Works with existing markdown collections
 - Minimal configuration required
 

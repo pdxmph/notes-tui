@@ -134,6 +134,7 @@ type model struct {
 	tagInput    textinput.Model // tag search input
 	tagFilter   bool            // are we showing only files with a specific tag?
 	taskFilter  bool            // are we showing only files with tasks?
+	dailyFilter bool            // are we showing only daily note files?
 	deleteMode  bool            // are we in delete confirmation mode?
 	deleteFile  string          // file to be deleted
 	cwd         string          // current working directory
@@ -388,6 +389,26 @@ func searchTasks(dir string) ([]string, error) {
 	}
 	
 	return files, nil
+}
+
+// Search for daily note files (matching *-daily.md pattern)
+func searchDailyNotes(dir string) ([]string, error) {
+	// Get all markdown files first
+	allFiles, err := findMarkdownFiles(dir)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Filter for files matching the daily note pattern
+	var dailyFiles []string
+	for _, file := range allFiles {
+		filename := filepath.Base(file)
+		if strings.HasSuffix(filename, "-daily.md") {
+			dailyFiles = append(dailyFiles, file)
+		}
+	}
+	
+	return dailyFiles, nil
 }
 func (m model) Init() tea.Cmd {
 	return tea.WindowSize()
@@ -719,6 +740,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.dailyFilter {
+				// Clear daily filter
+				m.dailyFilter = false
+				m.filtered = m.files
+				m.cursor = 0
+			}
 
 		case "n":
 			if m.deleteMode {
@@ -801,6 +828,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.taskFilter = true
 					m.tagFilter = false // Clear tag filter when switching to task filter
 					m.textFilter = false // Clear text filter when switching to task filter
+					m.dailyFilter = false // Clear daily filter when switching to task filter
+				}
+			}
+
+		case "D":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
+				// Search for daily notes
+				if files, err := searchDailyNotes(m.cwd); err == nil {
+					m.filtered = files
+					m.cursor = 0
+					m.dailyFilter = true
+					m.taskFilter = false // Clear task filter when switching to daily filter
+					m.tagFilter = false // Clear tag filter when switching to daily filter
+					m.textFilter = false // Clear text filter when switching to daily filter
 				}
 			}
 
@@ -823,6 +864,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if m.taskFilter {
 						if taskFiles, err := searchTasks(m.cwd); err == nil {
 							m.filtered = taskFiles
+						} else {
+							m.filtered = files
+						}
+					} else if m.dailyFilter {
+						if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
+							m.filtered = dailyFiles
 						} else {
 							m.filtered = files
 						}
@@ -872,6 +919,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.tagFilter = true // Set tag filter active
 						m.taskFilter = false // Clear task filter when switching to tag filter
 						m.textFilter = false // Clear text filter when switching to tag filter
+						m.dailyFilter = false // Clear daily filter when switching to tag filter
 					}
 				}
 				// Exit tag mode
@@ -918,6 +966,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textFilter = true
 					m.taskFilter = false // Clear other filters
 					m.tagFilter = false
+					m.dailyFilter = false
 				}
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
 				// Preview: use external if configured, otherwise internal
@@ -948,6 +997,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.taskFilter = false
 		m.tagFilter = false
 		m.textFilter = false // Also clear text filter since we're in live search mode
+		m.dailyFilter = false
 		cmds = append(cmds, cmd)
 	}
 
@@ -1049,6 +1099,9 @@ func (m model) View() string {
 	if m.textFilter {
 		header += " - [Search]"
 	}
+	if m.dailyFilter {
+		header += " - [Daily]"
+	}
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
 
 	if m.tagMode {
@@ -1114,7 +1167,7 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [t] tasks  [#] tags  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
