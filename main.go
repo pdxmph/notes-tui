@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +25,7 @@ type Config struct {
 	Editor         string `toml:"editor"`
 	PreviewCommand string `toml:"preview_command"`
 	AddFrontmatter bool   `toml:"add_frontmatter"`
+	InitialSort    string `toml:"initial_sort"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -137,6 +141,14 @@ type model struct {
 	dailyFilter bool            // are we showing only daily note files?
 	deleteMode  bool            // are we in delete confirmation mode?
 	deleteFile  string          // file to be deleted
+	// Sorting state
+	sortMode     bool            // are we in sort selection mode?
+	currentSort  string          // current sort method: "date", "modified", "title", or ""
+	// Days old filter
+	oldMode      bool            // are we in days old mode?
+	oldInput     textinput.Model // days old input
+	oldFilter    bool            // are we showing only files from last N days?
+	oldDays      int             // number of days for old filter
 	cwd         string          // current working directory
 	width       int             // terminal width
 	height      int             // terminal height
@@ -196,14 +208,31 @@ func initialModel(startupTag string) model {
 	tagi.CharLimit = 50
 	tagi.Width = 30
 
+	// Create days old input
+	oldi := textinput.New()
+	oldi.Placeholder = "Days back..."
+	oldi.CharLimit = 3
+	oldi.Width = 15
+
 	m := model{
 		files:       files,
 		filtered:    files, // Initially show all files
 		search:      ti,
 		createInput: ci,
 		tagInput:    tagi,
+		oldInput:    oldi,
 		cwd:         cwd,
 		config:      config,
+	}
+
+	// Apply initial sort if configured
+	if config.InitialSort != "" {
+		switch config.InitialSort {
+		case "date", "modified", "title":
+			m.currentSort = config.InitialSort
+			m.files = m.applySorting(files)
+			m.filtered = m.files
+		}
 	}
 
 	// If a startup tag was provided, apply tag filter
@@ -409,6 +438,99 @@ func searchDailyNotes(dir string) ([]string, error) {
 	}
 	
 	return dailyFiles, nil
+}
+
+// Sort files by different criteria
+func sortFilesByDate(files []string) []string {
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	
+	sort.Slice(sorted, func(i, j int) bool {
+		// Try to extract date from filename first (YYYY-MM-DD format)
+		nameI := filepath.Base(sorted[i])
+		nameJ := filepath.Base(sorted[j])
+		
+		// Check for YYYY-MM-DD pattern at start of filename
+		datePattern := `^(\d{4}-\d{2}-\d{2})`
+		if matched, _ := regexp.MatchString(datePattern, nameI); matched {
+			if matched2, _ := regexp.MatchString(datePattern, nameJ); matched2 {
+				return nameI > nameJ // Newer dates first
+			}
+		}
+		
+		// Fall back to file modification time
+		statI, errI := os.Stat(sorted[i])
+		statJ, errJ := os.Stat(sorted[j])
+		if errI != nil || errJ != nil {
+			return sorted[i] < sorted[j] // Fallback to name sort
+		}
+		return statI.ModTime().After(statJ.ModTime()) // Newer files first
+	})
+	
+	return sorted
+}
+
+func sortFilesByModified(files []string) []string {
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	
+	sort.Slice(sorted, func(i, j int) bool {
+		statI, errI := os.Stat(sorted[i])
+		statJ, errJ := os.Stat(sorted[j])
+		if errI != nil || errJ != nil {
+			return sorted[i] < sorted[j] // Fallback to name sort
+		}
+		return statI.ModTime().After(statJ.ModTime()) // Newer files first
+	})
+	
+	return sorted
+}
+
+func sortFilesByTitle(files []string) []string {
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	
+	sort.Slice(sorted, func(i, j int) bool {
+		nameI := filepath.Base(sorted[i])
+		nameJ := filepath.Base(sorted[j])
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
+	})
+	
+	return sorted
+}
+
+// Apply current sort to file list
+func (m *model) applySorting(files []string) []string {
+	switch m.currentSort {
+	case "date":
+		return sortFilesByDate(files)
+	case "modified":
+		return sortFilesByModified(files)
+	case "title":
+		return sortFilesByTitle(files)
+	default:
+		return files // No sorting
+	}
+}
+
+// Filter files by days old (files modified within last N days)
+func filterFilesByDaysOld(files []string, days int) []string {
+	if days <= 0 {
+		return files
+	}
+	
+	cutoff := time.Now().AddDate(0, 0, -days)
+	var filtered []string
+	
+	for _, file := range files {
+		if stat, err := os.Stat(file); err == nil {
+			if stat.ModTime().After(cutoff) {
+				filtered = append(filtered, file)
+			}
+		}
+	}
+	
+	return filtered
 }
 func (m model) Init() tea.Cmd {
 	return tea.WindowSize()
@@ -722,6 +844,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteMode = false
 				m.deleteFile = ""
 			}
+			if m.sortMode {
+				// Exit sort mode
+				m.sortMode = false
+			}
+			if m.oldMode {
+				// Exit old mode
+				m.oldMode = false
+				m.oldInput.SetValue("")
+			}
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
@@ -746,6 +877,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.oldFilter {
+				// Clear old filter
+				m.oldFilter = false
+				m.filtered = m.files
+				m.cursor = 0
+			}
 
 		case "n":
 			if m.deleteMode {
@@ -759,9 +896,67 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
-		case "d":
+		case "/":
+			if !m.createMode && !m.tagMode && !m.deleteMode {
+				// Enter search mode
+				m.searchMode = true
+				m.search.Focus()
+				return m, nil
+			}
+
+		case "#":
 			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
-				// Create or open daily note
+				// Enter tag search mode
+				m.tagMode = true
+				m.tagInput.Focus()
+				return m, nil
+			}
+
+		case "D":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+				// Search for daily notes
+				if files, err := searchDailyNotes(m.cwd); err == nil {
+					m.filtered = files
+					m.cursor = 0
+					m.dailyFilter = true
+					m.taskFilter = false // Clear task filter when switching to daily filter
+					m.tagFilter = false // Clear tag filter when switching to daily filter
+					m.textFilter = false // Clear text filter when switching to daily filter
+					m.oldFilter = false // Clear old filter when switching to daily filter
+				}
+			}
+
+		case "X":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
+				// Enter delete confirmation mode
+				m.deleteMode = true
+				m.deleteFile = m.filtered[m.cursor]
+			}
+
+		case "o":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.oldMode {
+				// Enter sort mode
+				m.sortMode = true
+			}
+
+		case "O":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode {
+				// Enter old (days back) mode
+				m.oldMode = true
+				m.oldInput.Focus()
+				return m, nil
+			}
+
+		case "d":
+			if m.sortMode {
+				// Sort by date
+				m.currentSort = "date"
+				m.files = m.applySorting(m.files)
+				m.filtered = m.applySorting(m.filtered)
+				m.sortMode = false
+				m.cursor = 0
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+				// Create or open daily note (existing functionality)
 				filename := getDailyNoteFilename()
 				fullPath := filepath.Join(m.cwd, filename)
 				
@@ -803,25 +998,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "/":
-			if !m.createMode && !m.tagMode && !m.deleteMode {
-				// Enter search mode
-				m.searchMode = true
-				m.search.Focus()
-				return m, nil
-			}
-
-		case "#":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
-				// Enter tag search mode
-				m.tagMode = true
-				m.tagInput.Focus()
-				return m, nil
+		case "m":
+			if m.sortMode {
+				// Sort by modified
+				m.currentSort = "modified"
+				m.files = m.applySorting(m.files)
+				m.filtered = m.applySorting(m.filtered)
+				m.sortMode = false
+				m.cursor = 0
 			}
 
 		case "t":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
-				// Search for tasks
+			if m.sortMode {
+				// Sort by title
+				m.currentSort = "title"
+				m.files = m.applySorting(m.files)
+				m.filtered = m.applySorting(m.filtered)
+				m.sortMode = false
+				m.cursor = 0
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+				// Search for tasks (existing functionality)
 				if files, err := searchTasks(m.cwd); err == nil {
 					m.filtered = files
 					m.cursor = 0
@@ -829,27 +1025,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tagFilter = false // Clear tag filter when switching to task filter
 					m.textFilter = false // Clear text filter when switching to task filter
 					m.dailyFilter = false // Clear daily filter when switching to task filter
+					m.oldFilter = false // Clear old filter when switching to task filter
 				}
-			}
-
-		case "D":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
-				// Search for daily notes
-				if files, err := searchDailyNotes(m.cwd); err == nil {
-					m.filtered = files
-					m.cursor = 0
-					m.dailyFilter = true
-					m.taskFilter = false // Clear task filter when switching to daily filter
-					m.tagFilter = false // Clear tag filter when switching to daily filter
-					m.textFilter = false // Clear text filter when switching to daily filter
-				}
-			}
-
-		case "X":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered) {
-				// Enter delete confirmation mode
-				m.deleteMode = true
-				m.deleteFile = m.filtered[m.cursor]
 			}
 
 		case "y":
@@ -920,11 +1097,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.taskFilter = false // Clear task filter when switching to tag filter
 						m.textFilter = false // Clear text filter when switching to tag filter
 						m.dailyFilter = false // Clear daily filter when switching to tag filter
+						m.oldFilter = false // Clear old filter when switching to tag filter
 					}
 				}
 				// Exit tag mode
 				m.tagMode = false
 				m.tagInput.SetValue("")
+			} else if m.oldMode {
+				// Apply days old filter
+				daysStr := m.oldInput.Value()
+				if daysStr != "" {
+					if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
+						filteredFiles := filterFilesByDaysOld(m.files, days)
+						m.filtered = filteredFiles
+						m.cursor = 0
+						m.oldFilter = true
+						m.oldDays = days
+						// Clear other filters when switching to old filter
+						m.taskFilter = false
+						m.tagFilter = false
+						m.textFilter = false
+						m.dailyFilter = false
+					}
+				}
+				// Exit old mode
+				m.oldMode = false
+				m.oldInput.SetValue("")
 			} else if m.createMode {
 				// Create the new note
 				title := m.createInput.Value()
@@ -998,6 +1196,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tagFilter = false
 		m.textFilter = false // Also clear text filter since we're in live search mode
 		m.dailyFilter = false
+		m.oldFilter = false
 		cmds = append(cmds, cmd)
 	}
 
@@ -1009,6 +1208,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle tag input
 	if m.tagMode {
 		m.tagInput, cmd = m.tagInput.Update(msg)
+	}
+
+	// Handle old input
+	if m.oldMode {
+		m.oldInput, cmd = m.oldInput.Update(msg)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1102,6 +1306,19 @@ func (m model) View() string {
 	if m.dailyFilter {
 		header += " - [Daily]"
 	}
+	if m.oldFilter {
+		header += fmt.Sprintf(" - [Last %d days]", m.oldDays)
+	}
+	if m.currentSort != "" {
+		switch m.currentSort {
+		case "date":
+			header += " - [Sort: Date]"
+		case "modified":
+			header += " - [Sort: Modified]"
+		case "title":
+			header += " - [Sort: Title]"
+		}
+	}
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
 
 	if m.tagMode {
@@ -1109,6 +1326,17 @@ func (m model) View() string {
 		content.WriteString("Search by Tag\n\n")
 		content.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
 		content.WriteString("[Enter] search [Esc] cancel")
+	} else if m.sortMode {
+		// Sort selection mode
+		content.WriteString("Sort Files\n\n")
+		content.WriteString("Choose sort method:\n")
+		content.WriteString("[d] Date  [m] Modified  [t] Title\n\n")
+		content.WriteString("[Esc] cancel")
+	} else if m.oldMode {
+		// Days old mode
+		content.WriteString("Filter by Days Old\n\n")
+		content.WriteString(fmt.Sprintf("Days back: %s\n\n", m.oldInput.View()))
+		content.WriteString("[Enter] apply filter [Esc] cancel")
 	} else if m.createMode {
 		// Create mode
 		content.WriteString("Create New Note\n\n")
@@ -1167,7 +1395,7 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [o] sort  [O] days old  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
