@@ -350,7 +350,7 @@ func extractNoteTitle(filepath string) string {
 }
 
 // Generate Denote-style filename from title
-func generateDenoteName(title string) (filename string, identifier string) {
+func generateDenoteName(title string, tags []string) (filename string, identifier string) {
 	// Get current timestamp
 	now := time.Now()
 	identifier = now.Format("20060102T150405")
@@ -377,6 +377,37 @@ func generateDenoteName(title string) (filename string, identifier string) {
 	// If empty after sanitization, use "untitled"
 	if cleaned == "" {
 		cleaned = "untitled"
+	}
+	
+	// Process tags if provided
+	if len(tags) > 0 {
+		var sanitizedTags []string
+		for _, tag := range tags {
+			// Sanitize each tag similar to title
+			tagLower := strings.ToLower(tag)
+			tagLower = strings.ReplaceAll(tagLower, " ", "-")
+			
+			var tagResult strings.Builder
+			for _, ch := range tagLower {
+				if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+					tagResult.WriteRune(ch)
+				}
+			}
+			
+			tagCleaned := regexp.MustCompile(`-+`).ReplaceAllString(tagResult.String(), "-")
+			tagCleaned = strings.Trim(tagCleaned, "-")
+			
+			if tagCleaned != "" {
+				sanitizedTags = append(sanitizedTags, tagCleaned)
+			}
+		}
+		
+		// Join tags with single underscore and append with double underscore
+		if len(sanitizedTags) > 0 {
+			tagString := strings.Join(sanitizedTags, "_")
+			filename = fmt.Sprintf("%s-%s__%s.md", identifier, cleaned, tagString)
+			return filename, identifier
+		}
 	}
 	
 	filename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
@@ -529,9 +560,17 @@ func generateNoteContent(title string, config Config, identifier string, tags []
 }
 
 // Get today's daily note filename
-func getDailyNoteFilename() string {
+// Generate daily note filename based on config
+func getDailyNoteFilename(config Config) (string, string) {
+	if config.DenoteFilenames {
+		// Use Denote format for daily notes
+		// Tags could be "daily" by default
+		filename, identifier := generateDenoteName("daily", []string{"daily"})
+		return filename, identifier
+	}
+	// Traditional format
 	today := time.Now().Format("2006-01-02")
-	return today + "-daily.md"
+	return today + "-daily.md", ""
 }
 
 // Search for files containing a specific tag using ripgrep
@@ -602,7 +641,7 @@ func searchTasks(dir string) ([]string, error) {
 	return files, nil
 }
 
-// Search for daily note files (matching *-daily.md pattern)
+// Search for daily note files (matching *-daily.md pattern or Denote files with __daily tag)
 func searchDailyNotes(dir string) ([]string, error) {
 	// Get all markdown files first
 	allFiles, err := findMarkdownFiles(dir)
@@ -614,7 +653,11 @@ func searchDailyNotes(dir string) ([]string, error) {
 	var dailyFiles []string
 	for _, file := range allFiles {
 		filename := filepath.Base(file)
+		// Check for traditional daily note format (*-daily.md)
 		if strings.HasSuffix(filename, "-daily.md") {
+			dailyFiles = append(dailyFiles, file)
+		} else if strings.Contains(filename, "__") && strings.Contains(filename, "_daily") {
+			// Check for Denote format with daily tag (e.g., 20250623T094530-daily__daily.md)
 			dailyFiles = append(dailyFiles, file)
 		}
 	}
@@ -1027,7 +1070,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var filename string
 				var identifier string
 				if m.config.DenoteFilenames {
-					filename, identifier = generateDenoteName(title)
+					filename, identifier = generateDenoteName(title, []string{})
 				} else {
 					filename = titleToFilename(title)
 					identifier = ""
@@ -1187,7 +1230,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
 				// Create or open daily note (existing functionality)
-				filename := getDailyNoteFilename()
+				filename, identifier := getDailyNoteFilename(m.config)
 				fullPath := filepath.Join(m.cwd, filename)
 				
 				// Check if file exists
@@ -1196,16 +1239,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					today := time.Now().Format("Monday, January 2, 2006")
 					title := fmt.Sprintf("Daily Note - %s", today)
 					
-					// Generate identifier if using Denote style
-					var identifier string
-					if m.config.DenoteFilenames {
-						// Extract timestamp from filename for consistency
-						// Format: 2006-01-02-daily.md
-						identifier = strings.ReplaceAll(strings.TrimSuffix(filename, "-daily.md"), "-", "") + "T000000"
-					}
-					
 					// Generate content with proper format
-					content := generateNoteContent(title, m.config, identifier, nil)
+					// For daily notes, we pass the "daily" tag automatically
+					var tags []string
+					if m.config.DenoteFilenames {
+						tags = []string{"daily"}
+					}
+					content := generateNoteContent(title, m.config, identifier, tags)
 					// Add daily note sections after frontmatter/title
 					content += "## Tasks\n\n## Notes\n\n"
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
@@ -1384,7 +1424,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						var filename string
 						var identifier string
 						if m.config.DenoteFilenames {
-							filename, identifier = generateDenoteName(title)
+							filename, identifier = generateDenoteName(title, []string{})
 						} else {
 							filename = titleToFilename(title)
 							identifier = ""
@@ -1438,7 +1478,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var filename string
 				var identifier string
 				if m.config.DenoteFilenames {
-					filename, identifier = generateDenoteName(title)
+					filename, identifier = generateDenoteName(title, tags)
 				} else {
 					filename = titleToFilename(title)
 					identifier = ""
