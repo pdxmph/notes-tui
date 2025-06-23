@@ -21,6 +21,17 @@ preview_command = "glow --style dark --pager"
 # If false or not set, new notes use simple markdown headers
 add_frontmatter = false
 
+# Enable Denote-style filenames for new notes (optional)
+# If true, new notes are created with format: YYYYMMDDTHHMMSS-title.md
+# Example: 20250623T093045-meeting-notes.md
+# When used with add_frontmatter=true, adds "identifier" field to frontmatter
+denote_filenames = false
+
+# Show extracted titles instead of filenames in list (optional)
+# If true, displays note titles from frontmatter or first heading
+# If false, shows filenames as before
+show_titles = false
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim

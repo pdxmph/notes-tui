@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"log"
@@ -26,6 +27,8 @@ type Config struct {
 	PreviewCommand string `toml:"preview_command"`
 	AddFrontmatter bool   `toml:"add_frontmatter"`
 	InitialSort    string `toml:"initial_sort"`
+	DenoteFilenames bool  `toml:"denote_filenames"`
+	ShowTitles     bool   `toml:"show_titles"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -283,6 +286,154 @@ func getDisplayName(fullPath, cwd string) string {
 	return rel
 }
 
+// Extract title from a note file
+func extractNoteTitle(filepath string) string {
+	// Read the first 20 lines of the file to find title
+	file, err := os.Open(filepath)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineCount := 0
+	inFrontmatter := false
+	
+	for scanner.Scan() && lineCount < 20 {
+		line := scanner.Text()
+		lineCount++
+		
+		// Check for YAML frontmatter
+		if lineCount == 1 && line == "---" {
+			inFrontmatter = true
+			continue
+		}
+		
+		// Look for title in frontmatter
+		if inFrontmatter {
+			if line == "---" {
+				inFrontmatter = false
+				continue
+			}
+			if strings.HasPrefix(line, "title:") {
+				title := strings.TrimSpace(strings.TrimPrefix(line, "title:"))
+				// Remove quotes if present
+				title = strings.Trim(title, "\"'")
+				if title != "" {
+					return title
+				}
+			}
+		}
+		
+		// Look for first level 1 heading
+		if !inFrontmatter && strings.HasPrefix(line, "# ") {
+			title := strings.TrimSpace(strings.TrimPrefix(line, "# "))
+			if title != "" {
+				return title
+			}
+		}
+	}
+	
+	return ""
+}
+
+// Generate Denote-style filename from title
+func generateDenoteName(title string) (filename string, identifier string) {
+	// Get current timestamp
+	now := time.Now()
+	identifier = now.Format("20060102T150405")
+	
+	// Sanitize title for filename
+	// Convert to lowercase
+	sanitized := strings.ToLower(title)
+	
+	// Replace spaces with hyphens
+	sanitized = strings.ReplaceAll(sanitized, " ", "-")
+	
+	// Remove special characters, keep only alphanumeric and hyphens
+	var result strings.Builder
+	for _, ch := range sanitized {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+			result.WriteRune(ch)
+		}
+	}
+	
+	// Clean up multiple hyphens
+	cleaned := regexp.MustCompile(`-+`).ReplaceAllString(result.String(), "-")
+	cleaned = strings.Trim(cleaned, "-")
+	
+	// If empty after sanitization, use "untitled"
+	if cleaned == "" {
+		cleaned = "untitled"
+	}
+	
+	filename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
+	return filename, identifier
+}
+
+// Parse Denote filename to extract title
+func parseDenoteFilename(filename string) (title string, timestamp time.Time) {
+	base := strings.TrimSuffix(filename, ".md")
+	
+	// Expected format: YYYYMMDDTHHMMSS-title
+	if len(base) < 16 { // Minimum length for timestamp + hyphen
+		return filename, time.Time{}
+	}
+	
+	// Check if it matches Denote pattern
+	if base[8] == 'T' && base[15] == '-' {
+		timestampStr := base[:15]
+		titlePart := base[16:]
+		
+		// Try to parse timestamp
+		t, err := time.Parse("20060102T150405", timestampStr)
+		if err == nil {
+			// Convert hyphens back to spaces and capitalize
+			words := strings.Split(titlePart, "-")
+			for i, word := range words {
+				if len(word) > 0 {
+					words[i] = strings.ToUpper(string(word[0])) + word[1:]
+				}
+			}
+			return strings.Join(words, " "), t
+		}
+	}
+	
+	return filename, time.Time{}
+}
+
+// Get enhanced display name for a file (with title extraction if enabled)
+func getEnhancedDisplayName(fullPath, cwd string, showTitles bool) string {
+	// Get the basic display name first
+	basicName := getDisplayName(fullPath, cwd)
+	
+	if !showTitles {
+		return basicName
+	}
+	
+	// Try to extract title
+	title := extractNoteTitle(fullPath)
+	
+	// If we got a title from the file content, use it
+	if title != "" {
+		// Check if it's a Denote file to add date
+		filename := filepath.Base(fullPath)
+		if _, timestamp := parseDenoteFilename(filename); !timestamp.IsZero() {
+			return fmt.Sprintf("%s (%s)", title, timestamp.Format("2006-01-02"))
+		}
+		return title
+	}
+	
+	// If no title in content, try parsing Denote filename
+	filename := filepath.Base(fullPath)
+	if denoteTitle, timestamp := parseDenoteFilename(filename); denoteTitle != filename && !timestamp.IsZero() {
+		return fmt.Sprintf("%s (%s)", denoteTitle, timestamp.Format("2006-01-02"))
+	}
+	
+	// Fall back to basic display name
+	return basicName
+}
+
 // Filter files based on search query
 func filterFiles(files []string, query string) []string {
 	if query == "" {
@@ -335,11 +486,17 @@ func titleToFilename(title string) string {
 }
 
 // Generate note content based on configuration
-func generateNoteContent(title string, config Config) string {
+func generateNoteContent(title string, config Config, identifier string) string {
 	if config.AddFrontmatter {
 		// YAML frontmatter format
 		today := time.Now().Format("2006-01-02")
-		return fmt.Sprintf("---\ntitle: %s\ndate: %s\n---\n\n", title, today)
+		if config.DenoteFilenames && identifier != "" {
+			// Include identifier field for Denote style
+			return fmt.Sprintf("---\ntitle: %s\ndate: %s\nidentifier: %s\n---\n\n", title, today, identifier)
+		} else {
+			// Standard frontmatter without identifier
+			return fmt.Sprintf("---\ntitle: %s\ndate: %s\n---\n\n", title, today)
+		}
 	} else {
 		// Simple markdown header format
 		return fmt.Sprintf("# %s\n\n", title)
@@ -962,9 +1119,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				
 				// Check if file exists
 				if _, err := os.Stat(fullPath); os.IsNotExist(err) {
-					// Create the daily note with a header
+					// Create the daily note with proper formatting
 					today := time.Now().Format("Monday, January 2, 2006")
-					content := fmt.Sprintf("# Daily Note - %s\n\n## Tasks\n\n## Notes\n\n", today)
+					title := fmt.Sprintf("Daily Note - %s", today)
+					
+					// Generate identifier if using Denote style
+					var identifier string
+					if m.config.DenoteFilenames {
+						// Extract timestamp from filename for consistency
+						// Format: 2006-01-02-daily.md
+						identifier = strings.ReplaceAll(strings.TrimSuffix(filename, "-daily.md"), "-", "") + "T000000"
+					}
+					
+					// Generate content with proper format
+					content := generateNoteContent(title, m.config, identifier)
+					// Add daily note sections after frontmatter/title
+					content += "## Tasks\n\n## Notes\n\n"
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
 						// Refresh file list to include new file
@@ -1127,11 +1297,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Create the new note
 				title := m.createInput.Value()
 				if title != "" {
-					filename := titleToFilename(title)
+					var filename string
+					var identifier string
+					if m.config.DenoteFilenames {
+						filename, identifier = generateDenoteName(title)
+					} else {
+						filename = titleToFilename(title)
+						identifier = ""
+					}
 					fullPath := filepath.Join(m.cwd, filename)
 					
 					// Create the file with templated content
-					content := generateNoteContent(title, m.config)
+					content := generateNoteContent(title, m.config, identifier)
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
 						// Refresh file list to include new file
@@ -1344,7 +1521,7 @@ func (m model) View() string {
 		content.WriteString("[Enter] create [Esc] cancel")
 	} else if m.deleteMode {
 		// Delete confirmation mode
-		filename := getDisplayName(m.deleteFile, m.cwd)
+		filename := getEnhancedDisplayName(m.deleteFile, m.cwd, m.config.ShowTitles)
 		content.WriteString("Delete Note\n\n")
 		content.WriteString(fmt.Sprintf("Delete '%s'?\n\n", filename))
 		content.WriteString("[y] yes [n] no [Esc] cancel")
@@ -1370,7 +1547,7 @@ func (m model) View() string {
 				cursor = "> "
 			}
 			
-			displayName := getDisplayName(m.filtered[i], m.cwd)
+			displayName := getEnhancedDisplayName(m.filtered[i], m.cwd, m.config.ShowTitles)
 			// Truncate if too long
 			maxLen := contentWidth - 3
 			if len(displayName) > maxLen {
@@ -1422,7 +1599,7 @@ func (m model) renderPreviewPopover() string {
 	header := lipgloss.NewStyle().
 		Bold(true).
 		MarginBottom(1).
-		Render(getDisplayName(m.previewFile, m.cwd))
+		Render(getEnhancedDisplayName(m.previewFile, m.cwd, m.config.ShowTitles))
 	
 	// Footer with controls
 	footer := lipgloss.NewStyle().
