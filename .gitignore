@@ -4,6 +4,13 @@ notes-tui
 # Test directory
 test-notes/
 
+# Test files
+test-*.toml
+test-*.sh
+
+# Config files (user specific)
+config.toml
+
 # Go build artifacts
 *.exe
 *.exe~
