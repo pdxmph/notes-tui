@@ -1,7 +1,0 @@
-# Test configuration for tag prompting feature
-notes_directory = "/Users/mph/code/notes-tui/test-notes"
-editor = "vim"
-add_frontmatter = true
-prompt_for_tags = true
-denote_filenames = false
-show_titles = true
