@@ -1,6 +1,6 @@
 # notes-tui
 
-A lightweight Notational Velocity-style TUI for markdown notes built with Go and Bubble Tea.
+A lightweight TUI for Markdown notes built with Go and Bubble Tea.
 
 ## Features
 
@@ -11,7 +11,6 @@ A lightweight Notational Velocity-style TUI for markdown notes built with Go and
 - **Task search** to find open `- [ ]` checkboxes
 - **Dual preview modes**: internal popover and external command
 - **Configurable** directory, editor, and preview commands
-- **Pure file-based** - no database, works with existing markdown files
 
 ## Installation
 
@@ -41,7 +40,7 @@ notes-tui /path/to/notes
 
 Create a config file at `~/.config/notes-tui/config.toml`:
 
-````toml
+```toml
 # Default directory for notes
 notes_directory = "/Users/mph/notes"
 
@@ -50,6 +49,7 @@ editor = "emacsclient --create-frame --no-wait"
 
 # External preview command (optional)
 preview_command = "glow --style dark --pager"
+```
 
 See `config.example.toml` for more examples.
 
@@ -66,19 +66,19 @@ See `config.example.toml` for more examples.
 ### Editor Examples
 
 ```toml
-editor = "emacsclient --create-frame --no-wait"  # Emacs
+editor = "emacsclient -cn"  # Emacs
 editor = "code --wait"                            # VS Code
 editor = "vim"                                    # Vim
 editor = "subl --wait"                            # Sublime Text
-````
+```
 
 ### Preview Examples
 
 ```toml
 # External preview replaces internal preview when configured
-preview_command = "glow --style dark --pager"              # Glow with pager
+preview_command = "glow -p"                                # Glow with pager
 preview_command = "bat --style=plain --color=always"       # Bat with color
-preview_command = "mdcat"                                   # mdcat viewer
+preview_command = "mdcat"                                  # mdcat viewer
 
 # Leave unset for internal preview popover (default)
 # preview_command = ""
@@ -135,16 +135,3 @@ Finds tags in multiple formats:
 
 - Go 1.23+
 - `ripgrep` for tag and task search
-
-## Development
-
-The tool is designed to be simple and fast:
-
-- Single Go binary
-- No database dependencies
-- Works with existing markdown collections
-- Minimal configuration required
-
-## Contributing
-
-Issues and pull requests welcome! See the [GitHub repository](https://github.com/pdxmph/notes-tui).
