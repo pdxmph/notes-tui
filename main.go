@@ -1936,8 +1936,29 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [R] rename  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [o] sort  [O] days old  [q] quit"
-			content.WriteString("\n" + helpStyle.Render(help))
+			hotkeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true) // Orange color for hotkeys
+			sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("236")) // Darker separator
+			
+			// Build help text with colored hotkeys and separators
+			sep := sepStyle.Render(" • ")
+			
+			helpLine1 := hotkeyStyle.Render("[/]") + " search" + sep +
+				hotkeyStyle.Render("[Enter]") + " preview" + sep +
+				"all " + hotkeyStyle.Render("[D]") + "aily" + sep +
+				"open " + hotkeyStyle.Render("[t]") + "asks" + sep +
+				hotkeyStyle.Render("[#]") + " tags" + sep +
+				"s" + hotkeyStyle.Render("[o]") + "rt" + sep +
+				"days " + hotkeyStyle.Render("[O]") + "ld"
+			
+			helpLine2 := hotkeyStyle.Render("[e]") + "dit" + sep +
+				hotkeyStyle.Render("[n]") + "ew note" + sep +
+				hotkeyStyle.Render("[d]") + "aily note" + sep +
+				hotkeyStyle.Render("[R]") + "ename" + sep +
+				hotkeyStyle.Render("[X]") + " delete" + sep +
+				hotkeyStyle.Render("[q]") + "uit"
+			
+			content.WriteString("\n" + helpStyle.Render(helpLine1))
+			content.WriteString("\n" + helpStyle.Render(helpLine2))
 		}
 	}
 
