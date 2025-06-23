@@ -29,6 +29,7 @@ type Config struct {
 	InitialSort    string `toml:"initial_sort"`
 	DenoteFilenames bool  `toml:"denote_filenames"`
 	ShowTitles     bool   `toml:"show_titles"`
+	PromptForTags  bool   `toml:"prompt_for_tags"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -144,6 +145,10 @@ type model struct {
 	dailyFilter bool            // are we showing only daily note files?
 	deleteMode  bool            // are we in delete confirmation mode?
 	deleteFile  string          // file to be deleted
+	// Tag creation state
+	tagCreateMode  bool            // are we prompting for tags during note creation?
+	tagCreateInput textinput.Model // tag input during note creation
+	pendingTitle   string          // title waiting for tags before creating note
 	// Sorting state
 	sortMode     bool            // are we in sort selection mode?
 	currentSort  string          // current sort method: "date", "modified", "title", or ""
@@ -211,6 +216,12 @@ func initialModel(startupTag string) model {
 	tagi.CharLimit = 50
 	tagi.Width = 30
 
+	// Create tag creation input
+	tagci := textinput.New()
+	tagci.Placeholder = "Tags (comma-separated, optional)..."
+	tagci.CharLimit = 200
+	tagci.Width = 50
+
 	// Create days old input
 	oldi := textinput.New()
 	oldi.Placeholder = "Days back..."
@@ -218,14 +229,15 @@ func initialModel(startupTag string) model {
 	oldi.Width = 15
 
 	m := model{
-		files:       files,
-		filtered:    files, // Initially show all files
-		search:      ti,
-		createInput: ci,
-		tagInput:    tagi,
-		oldInput:    oldi,
-		cwd:         cwd,
-		config:      config,
+		files:          files,
+		filtered:       files, // Initially show all files
+		search:         ti,
+		createInput:    ci,
+		tagInput:       tagi,
+		tagCreateInput: tagci,
+		oldInput:       oldi,
+		cwd:            cwd,
+		config:         config,
 	}
 
 	// Apply initial sort if configured
@@ -486,17 +498,30 @@ func titleToFilename(title string) string {
 }
 
 // Generate note content based on configuration
-func generateNoteContent(title string, config Config, identifier string) string {
+func generateNoteContent(title string, config Config, identifier string, tags []string) string {
 	if config.AddFrontmatter {
 		// YAML frontmatter format
 		today := time.Now().Format("2006-01-02")
+		
+		// Start building frontmatter
+		frontmatter := "---\n"
+		frontmatter += fmt.Sprintf("title: %s\n", title)
+		frontmatter += fmt.Sprintf("date: %s\n", today)
+		
+		// Add identifier if using Denote style
 		if config.DenoteFilenames && identifier != "" {
-			// Include identifier field for Denote style
-			return fmt.Sprintf("---\ntitle: %s\ndate: %s\nidentifier: %s\n---\n\n", title, today, identifier)
-		} else {
-			// Standard frontmatter without identifier
-			return fmt.Sprintf("---\ntitle: %s\ndate: %s\n---\n\n", title, today)
+			frontmatter += fmt.Sprintf("identifier: %s\n", identifier)
 		}
+		
+		// Add tags if provided
+		if len(tags) > 0 {
+			// Format as YAML array
+			tagList := strings.Join(tags, ", ")
+			frontmatter += fmt.Sprintf("tags: [%s]\n", tagList)
+		}
+		
+		frontmatter += "---\n\n"
+		return frontmatter
 	} else {
 		// Simple markdown header format
 		return fmt.Sprintf("# %s\n\n", title)
@@ -950,6 +975,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.createInput.SetValue("")
 				return m, nil
 			}
+			if m.tagCreateMode {
+				// Exit tag create mode on q
+				m.tagCreateMode = false
+				m.tagCreateInput.SetValue("")
+				m.pendingTitle = ""
+				return m, nil
+			}
 			if m.tagMode {
 				// Exit tag mode on q
 				m.tagMode = false
@@ -968,7 +1000,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "e", "ctrl+e":
 			// Open in external editor
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor < len(m.filtered) {
 				m.selected = m.filtered[m.cursor]
 				// We'll handle the actual editor opening after we return
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
@@ -988,6 +1020,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit create mode
 				m.createMode = false
 				m.createInput.SetValue("")
+			}
+			if m.tagCreateMode {
+				// Exit tag create mode and create note without tags
+				title := m.pendingTitle
+				var filename string
+				var identifier string
+				if m.config.DenoteFilenames {
+					filename, identifier = generateDenoteName(title)
+				} else {
+					filename = titleToFilename(title)
+					identifier = ""
+				}
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Create the file without tags
+				content := generateNoteContent(title, m.config, identifier, nil)
+				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+					m.selected = fullPath
+					// Refresh file list to include new file
+					files, _ := findMarkdownFiles(m.cwd)
+					m.files = files
+					m.filtered = files
+					// Find and select the new file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					// Exit tag create mode and open editor
+					m.tagCreateMode = false
+					m.tagCreateInput.SetValue("")
+					m.pendingTitle = ""
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				}
+				// If file creation failed, still exit the mode
+				m.tagCreateMode = false
+				m.tagCreateInput.SetValue("")
+				m.pendingTitle = ""
 			}
 			if m.tagMode {
 				// Exit tag mode
@@ -1046,7 +1119,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Cancel deletion
 				m.deleteMode = false
 				m.deleteFile = ""
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
 				// Enter create mode
 				m.createMode = true
 				m.createInput.Focus()
@@ -1054,7 +1127,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "/":
-			if !m.createMode && !m.tagMode && !m.deleteMode {
+			if !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
 				// Enter search mode
 				m.searchMode = true
 				m.search.Focus()
@@ -1062,7 +1135,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "#":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
 				// Enter tag search mode
 				m.tagMode = true
 				m.tagInput.Focus()
@@ -1070,7 +1143,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "D":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
 				// Search for daily notes
 				if files, err := searchDailyNotes(m.cwd); err == nil {
 					m.filtered = files
@@ -1084,20 +1157,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "X":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
 				// Enter delete confirmation mode
 				m.deleteMode = true
 				m.deleteFile = m.filtered[m.cursor]
 			}
 
 		case "o":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.oldMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.oldMode {
 				// Enter sort mode
 				m.sortMode = true
 			}
 
 		case "O":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode {
 				// Enter old (days back) mode
 				m.oldMode = true
 				m.oldInput.Focus()
@@ -1112,7 +1185,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.applySorting(m.filtered)
 				m.sortMode = false
 				m.cursor = 0
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
 				// Create or open daily note (existing functionality)
 				filename := getDailyNoteFilename()
 				fullPath := filepath.Join(m.cwd, filename)
@@ -1132,7 +1205,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					
 					// Generate content with proper format
-					content := generateNoteContent(title, m.config, identifier)
+					content := generateNoteContent(title, m.config, identifier, nil)
 					// Add daily note sections after frontmatter/title
 					content += "## Tasks\n\n## Notes\n\n"
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
@@ -1186,7 +1259,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.applySorting(m.filtered)
 				m.sortMode = false
 				m.cursor = 0
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
 				// Search for tasks (existing functionality)
 				if files, err := searchTasks(m.cwd); err == nil {
 					m.filtered = files
@@ -1241,13 +1314,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up", "k":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor > 0 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor > 0 {
 				m.cursor--
 				// Don't auto-load preview on cursor movement
 			}
 
 		case "down", "j":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.deleteMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 				// Don't auto-load preview on cursor movement
 			}
@@ -1294,45 +1367,107 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.oldMode = false
 				m.oldInput.SetValue("")
 			} else if m.createMode {
-				// Create the new note
+				// Get the title
 				title := m.createInput.Value()
 				if title != "" {
-					var filename string
-					var identifier string
-					if m.config.DenoteFilenames {
-						filename, identifier = generateDenoteName(title)
-					} else {
-						filename = titleToFilename(title)
-						identifier = ""
-					}
-					fullPath := filepath.Join(m.cwd, filename)
-					
-					// Create the file with templated content
-					content := generateNoteContent(title, m.config, identifier)
-					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
-						m.selected = fullPath
-						// Refresh file list to include new file
-						files, _ := findMarkdownFiles(m.cwd)
-						m.files = files
-						m.filtered = files
-						// Find and select the new file
-						for i, f := range m.filtered {
-							if f == fullPath {
-								m.cursor = i
-								break
-							}
-						}
-						// Exit create mode and open editor
+					// Check if we should prompt for tags
+					if m.config.AddFrontmatter && m.config.PromptForTags {
+						// Transition to tag input mode
+						m.pendingTitle = title
 						m.createMode = false
 						m.createInput.SetValue("")
-						return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-							return clearSelectedMsg{}
-						})
+						m.tagCreateMode = true
+						m.tagCreateInput.Focus()
+						return m, nil
+					} else {
+						// Create note without tags
+						var filename string
+						var identifier string
+						if m.config.DenoteFilenames {
+							filename, identifier = generateDenoteName(title)
+						} else {
+							filename = titleToFilename(title)
+							identifier = ""
+						}
+						fullPath := filepath.Join(m.cwd, filename)
+						
+						// Create the file with templated content
+						content := generateNoteContent(title, m.config, identifier, nil)
+						if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+							m.selected = fullPath
+							// Refresh file list to include new file
+							files, _ := findMarkdownFiles(m.cwd)
+							m.files = files
+							m.filtered = files
+							// Find and select the new file
+							for i, f := range m.filtered {
+								if f == fullPath {
+									m.cursor = i
+									break
+								}
+							}
+							// Exit create mode and open editor
+							m.createMode = false
+							m.createInput.SetValue("")
+							return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+								return clearSelectedMsg{}
+							})
+						}
 					}
 				}
-				// Exit create mode
+				// Exit create mode if title is empty
 				m.createMode = false
 				m.createInput.SetValue("")
+			} else if m.tagCreateMode {
+				// Process tags and create the note
+				tagInput := m.tagCreateInput.Value()
+				var tags []string
+				if tagInput != "" {
+					// Parse comma-separated tags
+					parts := strings.Split(tagInput, ",")
+					for _, tag := range parts {
+						trimmed := strings.TrimSpace(tag)
+						if trimmed != "" {
+							tags = append(tags, trimmed)
+						}
+					}
+				}
+				
+				// Now create the note with the pending title and tags
+				title := m.pendingTitle
+				var filename string
+				var identifier string
+				if m.config.DenoteFilenames {
+					filename, identifier = generateDenoteName(title)
+				} else {
+					filename = titleToFilename(title)
+					identifier = ""
+				}
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Create the file with templated content including tags
+				content := generateNoteContent(title, m.config, identifier, tags)
+				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+					m.selected = fullPath
+					// Refresh file list to include new file
+					files, _ := findMarkdownFiles(m.cwd)
+					m.files = files
+					m.filtered = files
+					// Find and select the new file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					// Exit tag create mode and open editor
+					m.tagCreateMode = false
+					m.tagCreateInput.SetValue("")
+					m.pendingTitle = ""
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				}
 			} else if m.searchMode {
 				// Exit search mode on enter, but keep the filter active
 				m.searchMode = false
@@ -1385,6 +1520,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle tag input
 	if m.tagMode {
 		m.tagInput, cmd = m.tagInput.Update(msg)
+	}
+
+	// Handle tag creation input
+	if m.tagCreateMode {
+		m.tagCreateInput, cmd = m.tagCreateInput.Update(msg)
 	}
 
 	// Handle old input
@@ -1519,6 +1659,12 @@ func (m model) View() string {
 		content.WriteString("Create New Note\n\n")
 		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
 		content.WriteString("[Enter] create [Esc] cancel")
+	} else if m.tagCreateMode {
+		// Tag creation mode
+		content.WriteString("Add Tags to New Note\n\n")
+		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.pendingTitle))
+		content.WriteString(fmt.Sprintf("Tags: %s\n\n", m.tagCreateInput.View()))
+		content.WriteString("[Enter] create note [Esc] create without tags")
 	} else if m.deleteMode {
 		// Delete confirmation mode
 		filename := getEnhancedDisplayName(m.deleteFile, m.cwd, m.config.ShowTitles)

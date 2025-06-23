@@ -1,0 +1,26 @@
+# Example configuration file for notes-tui
+# Copy this to ~/.config/notes-tui/config.toml and customize
+
+# Default directory for notes
+# If not set, uses current directory or ~/notes if it exists
+notes_directory = "/Users/mph/everything/notes"
+
+# Editor command with arguments
+# Supports commands with spaces and arguments
+# If not set, falls back to $EDITOR environment variable
+# editor = "/opt/homebrew/bin/emacsclient -nw"
+
+# External preview command
+# Use tools like glow, bat, or any markdown viewer
+# If not set, uses internal preview
+preview_command = "/opt/homebrew/bin/glow -p -w 90"
+
+# Other example configurations:
+# editor = "code --wait"              # VS Code
+# editor = "vim"                      # Simple vim
+# preview_command = "bat --style=plain --color=always"  # bat with color
+# preview_command = "mdcat"           # mdcat viewer
+
+add_frontmatter = true
+
+initial_sort = "modified"

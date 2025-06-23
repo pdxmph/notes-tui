@@ -21,6 +21,12 @@ preview_command = "glow --style dark --pager"
 # If false or not set, new notes use simple markdown headers
 add_frontmatter = false
 
+# Prompt for tags when creating new notes (optional)
+# Only works when add_frontmatter is true
+# If true, prompts for comma-separated tags after entering title
+# Tags are stored as YAML array format: tags: [tag1, tag2, tag3]
+prompt_for_tags = false
+
 # Enable Denote-style filenames for new notes (optional)
 # If true, new notes are created with format: YYYYMMDDTHHMMSS-title.md
 # Example: 20250623T093045-meeting-notes.md

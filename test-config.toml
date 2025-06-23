@@ -1,0 +1,6 @@
+# Test configuration for Denote features
+notes_directory = "/Users/mph/code/notes-tui/test-notes"
+editor = "vim"
+add_frontmatter = true
+denote_filenames = true
+show_titles = true

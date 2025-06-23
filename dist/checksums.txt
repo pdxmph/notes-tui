@@ -1,0 +1,1 @@
+6d5e107e588bf096916de37fbcfa740d8796791aea914dfbb9da3d4700cc84f7  notes-tui_v0.1.0_darwin_arm64.tar.gz

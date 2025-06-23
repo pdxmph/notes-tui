@@ -58,6 +58,10 @@ See `config.example.toml` for more examples.
 - **`notes_directory`**: Default directory for notes (overridden by command line argument)
 - **`editor`**: Editor command with arguments. Supports commands with spaces. Falls back to `$EDITOR` if not set.
 - **`preview_command`**: External preview command (optional). When set, `Enter` key uses external preview instead of internal popover.
+- **`add_frontmatter`**: Add YAML frontmatter to new notes (default: false). When true, notes get frontmatter with title and date.
+- **`prompt_for_tags`**: Prompt for tags when creating notes (default: false). Only works when `add_frontmatter` is true. Tags are stored as YAML array.
+- **`denote_filenames`**: Use Denote-style filenames (default: false). Format: `YYYYMMDDTHHMMSS-title.md`
+- **`show_titles`**: Show extracted titles instead of filenames in list (default: false)
 
 ### Editor Examples
 
@@ -110,6 +114,8 @@ preview_command = "mdcat"                                   # mdcat viewer
 ### Note Creation
 
 - **Regular notes** (`n`): Creates `title-in-kebab-case.md`
+  - With `add_frontmatter = true`: Adds YAML frontmatter with title and date
+  - With `prompt_for_tags = true`: Prompts for comma-separated tags after title
 - **Daily notes** (`d`): Creates `YYYY-MM-DD-daily.md` with template
 
 ### Tag Support
