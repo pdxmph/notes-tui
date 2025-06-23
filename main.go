@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -166,6 +167,9 @@ type model struct {
 	previewContent string          // content for preview popover
 	previewFile    string          // file being previewed
 	previewScroll  int             // scroll position in preview
+	// Rename state
+	renameMode     bool            // are we renaming a file to Denote format?
+	renameFile     string          // file being renamed
 }
 
 // Message for preview content
@@ -443,6 +447,148 @@ func parseDenoteFilename(filename string) (title string, timestamp time.Time) {
 	}
 	
 	return filename, time.Time{}
+}
+
+// Rename a file to Denote format
+func renameToDenoteName(filepath string, config Config) (string, error) {
+	// Check if file already has Denote format
+	filename := path.Base(filepath)
+	denotePattern := regexp.MustCompile(`^\d{8}T\d{6}-`)
+	var existingTimestamp string
+	
+	if denotePattern.MatchString(filename) {
+		// Extract existing timestamp
+		existingTimestamp = filename[:15]
+	}
+	
+	// Read file to extract title and tags
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		return "", fmt.Errorf("failed to read file: %w", err)
+	}
+	
+	// Extract title - use the extractNoteTitle function
+	title := extractNoteTitle(filepath)
+	
+	// Extract tags from frontmatter
+	var tags []string
+	lines := strings.Split(string(content), "\n")
+	inFrontmatter := false
+	
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		
+		// Check for frontmatter boundaries
+		if i == 0 && trimmed == "---" {
+			inFrontmatter = true
+			continue
+		}
+		if inFrontmatter && trimmed == "---" {
+			break
+		}
+		
+		// Look for tags in frontmatter
+		if inFrontmatter && strings.HasPrefix(trimmed, "tags:") {
+			// Handle array format: tags: [tag1, tag2, tag3]
+			if strings.Contains(trimmed, "[") {
+				// Extract tags from array format
+				tagsPart := strings.TrimPrefix(trimmed, "tags:")
+				tagsPart = strings.TrimSpace(tagsPart)
+				tagsPart = strings.Trim(tagsPart, "[]")
+				
+				if tagsPart != "" {
+					// Split by comma and clean each tag
+					tagList := strings.Split(tagsPart, ",")
+					for _, tag := range tagList {
+						cleaned := strings.TrimSpace(tag)
+						if cleaned != "" {
+							tags = append(tags, cleaned)
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	// Generate new filename
+	var newFilename string
+	var identifier string
+	
+	if existingTimestamp != "" {
+		// Preserve existing timestamp
+		identifier = existingTimestamp
+		
+		// Sanitize title for filename
+		titleLower := strings.ToLower(title)
+		titleLower = strings.ReplaceAll(titleLower, " ", "-")
+		
+		var result strings.Builder
+		for _, ch := range titleLower {
+			if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+				result.WriteRune(ch)
+			}
+		}
+		
+		cleaned := regexp.MustCompile(`-+`).ReplaceAllString(result.String(), "-")
+		cleaned = strings.Trim(cleaned, "-")
+		
+		if cleaned == "" {
+			cleaned = "untitled"
+		}
+		
+		// Build filename with tags if present
+		if len(tags) > 0 {
+			var sanitizedTags []string
+			for _, tag := range tags {
+				tagLower := strings.ToLower(tag)
+				tagLower = strings.ReplaceAll(tagLower, " ", "-")
+				
+				var tagResult strings.Builder
+				for _, ch := range tagLower {
+					if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '-' {
+						tagResult.WriteRune(ch)
+					}
+				}
+				
+				tagCleaned := regexp.MustCompile(`-+`).ReplaceAllString(tagResult.String(), "-")
+				tagCleaned = strings.Trim(tagCleaned, "-")
+				
+				if tagCleaned != "" {
+					sanitizedTags = append(sanitizedTags, tagCleaned)
+				}
+			}
+			
+			if len(sanitizedTags) > 0 {
+				tagString := strings.Join(sanitizedTags, "_")
+				newFilename = fmt.Sprintf("%s-%s__%s.md", identifier, cleaned, tagString)
+			} else {
+				newFilename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
+			}
+		} else {
+			newFilename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
+		}
+	} else {
+		// Generate new filename with current timestamp
+		newFilename, identifier = generateDenoteName(title, tags)
+	}
+	
+	// Create new path
+	dir := path.Dir(filepath)
+	newPath := path.Join(dir, newFilename)
+	
+	// Check if target already exists
+	if filepath != newPath {
+		if _, err := os.Stat(newPath); err == nil {
+			return "", fmt.Errorf("file already exists: %s", newFilename)
+		}
+		
+		// Rename the file
+		if err := os.Rename(filepath, newPath); err != nil {
+			return "", fmt.Errorf("failed to rename file: %w", err)
+		}
+	}
+	
+	return newPath, nil
 }
 
 // Get enhanced display name for a file (with title extraction if enabled)
@@ -1156,6 +1302,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.files
 				m.cursor = 0
 			}
+			if m.renameMode {
+				// Exit rename mode
+				m.renameMode = false
+				m.renameFile = ""
+			}
 
 		case "n":
 			if m.deleteMode {
@@ -1218,6 +1369,33 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.oldMode = true
 				m.oldInput.Focus()
 				return m, nil
+			}
+
+		case "R":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
+				// Enter rename mode - rename file to Denote format
+				m.renameMode = true
+				m.renameFile = m.filtered[m.cursor]
+				
+				// Perform the rename immediately
+				if newPath, err := renameToDenoteName(m.renameFile, m.config); err == nil {
+					// Refresh file list after successful rename
+					files, _ := findMarkdownFiles(m.cwd)
+					m.files = m.applySorting(files)
+					m.filtered = m.files
+					
+					// Try to maintain cursor position on the renamed file
+					for i, f := range m.filtered {
+						if f == newPath {
+							m.cursor = i
+							break
+						}
+					}
+				}
+				
+				// Always exit rename mode immediately
+				m.renameMode = false
+				m.renameFile = ""
 			}
 
 		case "d":
@@ -1758,7 +1936,7 @@ func (m model) View() string {
 		} else {
 			// Help text
 			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [o] sort  [O] days old  [q] quit"
+			help := "[/] search  [Enter] preview  [e] edit  [X] delete  [R] rename  [n] new  [d] daily  [D] all daily  [t] tasks  [#] tags  [o] sort  [O] days old  [q] quit"
 			content.WriteString("\n" + helpStyle.Render(help))
 		}
 	}
