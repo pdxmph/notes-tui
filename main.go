@@ -152,7 +152,8 @@ type model struct {
 	pendingTitle   string          // title waiting for tags before creating note
 	// Sorting state
 	sortMode     bool            // are we in sort selection mode?
-	currentSort  string          // current sort method: "date", "modified", "title", or ""
+	currentSort  string          // current sort method: "date", "modified", "title", "denote", or ""
+	reversedSort bool            // is the current sort reversed?
 	// Days old filter
 	oldMode      bool            // are we in days old mode?
 	oldInput     textinput.Model // days old input
@@ -907,18 +908,67 @@ func sortFilesByTitle(files []string) []string {
 	return sorted
 }
 
+func sortFilesByDenoteIdentifier(files []string) []string {
+	sorted := make([]string, len(files))
+	copy(sorted, files)
+	
+	sort.Slice(sorted, func(i, j int) bool {
+		nameI := filepath.Base(sorted[i])
+		nameJ := filepath.Base(sorted[j])
+		
+		// Extract Denote identifier from filename (YYYYMMDDTHHMMSS)
+		denotePattern := regexp.MustCompile(`^(\d{8}T\d{6})-`)
+		
+		matchI := denotePattern.FindStringSubmatch(nameI)
+		matchJ := denotePattern.FindStringSubmatch(nameJ)
+		
+		// If both have Denote identifiers, compare them
+		if len(matchI) > 1 && len(matchJ) > 1 {
+			return matchI[1] > matchJ[1] // Newer identifiers first
+		}
+		
+		// If only one has identifier, it comes first
+		if len(matchI) > 1 && len(matchJ) <= 1 {
+			return true
+		}
+		if len(matchI) <= 1 && len(matchJ) > 1 {
+			return false
+		}
+		
+		// If neither has identifier, fall back to filename sort
+		return strings.ToLower(nameI) < strings.ToLower(nameJ)
+	})
+	
+	return sorted
+}
+
 // Apply current sort to file list
 func (m *model) applySorting(files []string) []string {
+	var sorted []string
+	
 	switch m.currentSort {
 	case "date":
-		return sortFilesByDate(files)
+		sorted = sortFilesByDate(files)
 	case "modified":
-		return sortFilesByModified(files)
+		sorted = sortFilesByModified(files)
 	case "title":
-		return sortFilesByTitle(files)
+		sorted = sortFilesByTitle(files)
+	case "denote":
+		sorted = sortFilesByDenoteIdentifier(files)
 	default:
-		return files // No sorting
+		sorted = files // No sorting
 	}
+	
+	// Apply reverse if enabled
+	if m.reversedSort && len(sorted) > 0 {
+		reversed := make([]string, len(sorted))
+		for i, file := range sorted {
+			reversed[len(sorted)-1-i] = file
+		}
+		return reversed
+	}
+	
+	return sorted
 }
 
 // Filter files by days old (files modified within last N days)
@@ -1527,6 +1577,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
+		case "i":
+			if m.sortMode {
+				// Sort by Denote identifier
+				m.currentSort = "denote"
+				m.files = m.applySorting(m.files)
+				m.filtered = m.applySorting(m.filtered)
+				m.sortMode = false
+				m.cursor = 0
+			}
+
+		case "r":
+			if m.sortMode {
+				// Reverse current sort
+				m.reversedSort = !m.reversedSort
+				m.files = m.applySorting(m.files)
+				m.filtered = m.applySorting(m.filtered)
+				m.sortMode = false
+				m.cursor = 0
+			}
+
 		case "y":
 			if m.deleteMode {
 				// Confirm deletion
@@ -1882,14 +1952,21 @@ func (m model) View() string {
 		header += fmt.Sprintf(" - [Last %d days]", m.oldDays)
 	}
 	if m.currentSort != "" {
+		sortLabel := ""
 		switch m.currentSort {
 		case "date":
-			header += " - [Sort: Date]"
+			sortLabel = "Date"
 		case "modified":
-			header += " - [Sort: Modified]"
+			sortLabel = "Modified"
 		case "title":
-			header += " - [Sort: Title]"
+			sortLabel = "Title"
+		case "denote":
+			sortLabel = "Denote"
 		}
+		if m.reversedSort {
+			sortLabel += " (reversed)"
+		}
+		header += fmt.Sprintf(" - [Sort: %s]", sortLabel)
 	}
 	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
 
@@ -1902,7 +1979,7 @@ func (m model) View() string {
 		// Sort selection mode
 		content.WriteString("Sort Files\n\n")
 		content.WriteString("Choose sort method:\n")
-		content.WriteString("[d] Date  [m] Modified  [t] Title\n\n")
+		content.WriteString("[d] Date  [m] Modified  [t] Title  [i] Denote  [r] Reverse\n\n")
 		content.WriteString("[Esc] cancel")
 	} else if m.oldMode {
 		// Days old mode
