@@ -21,6 +21,23 @@ preview_command = "glow --style dark --pager"
 # If false or not set, new notes use simple markdown headers
 add_frontmatter = false
 
+# Initial sort order for file list (optional)
+# Options: "date", "modified", "title", "denote", or "" (no sort)
+# "date" - Sort by date extracted from filename or file modification time
+# "modified" - Sort by file modification time 
+# "title" - Sort alphabetically by filename/title
+# "denote" - Sort by Denote identifier timestamp (YYYYMMDDTHHMMSS)
+# "" or unset - No initial sorting
+initial_sort = ""
+
+# Start with reversed sort order (optional)
+# If true, reverses the initial_sort order
+# If false or not set, uses normal sort order
+# Examples: 
+#   initial_sort="denote" + initial_reverse_sort=true = oldest Denote files first
+#   initial_sort="modified" + initial_reverse_sort=true = oldest modified files first
+initial_reverse_sort = false
+
 # Prompt for tags when creating new notes (optional)
 # Only works when add_frontmatter is true
 # If true, prompts for comma-separated tags after entering title

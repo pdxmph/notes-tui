@@ -23,14 +23,15 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	NotesDirectory string `toml:"notes_directory"`
-	Editor         string `toml:"editor"`
-	PreviewCommand string `toml:"preview_command"`
-	AddFrontmatter bool   `toml:"add_frontmatter"`
-	InitialSort    string `toml:"initial_sort"`
-	DenoteFilenames bool  `toml:"denote_filenames"`
-	ShowTitles     bool   `toml:"show_titles"`
-	PromptForTags  bool   `toml:"prompt_for_tags"`
+	NotesDirectory     string `toml:"notes_directory"`
+	Editor             string `toml:"editor"`
+	PreviewCommand     string `toml:"preview_command"`
+	AddFrontmatter     bool   `toml:"add_frontmatter"`
+	InitialSort        string `toml:"initial_sort"`
+	InitialReverseSort bool   `toml:"initial_reverse_sort"`
+	DenoteFilenames    bool   `toml:"denote_filenames"`
+	ShowTitles         bool   `toml:"show_titles"`
+	PromptForTags      bool   `toml:"prompt_for_tags"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -45,10 +46,11 @@ func DefaultConfig() Config {
 	}
 	
 	return Config{
-		NotesDirectory: notesDir,
-		Editor:         "", // Will fall back to $EDITOR
-		PreviewCommand: "", // Will use internal preview
-		AddFrontmatter: false, // Default to simple markdown headers
+		NotesDirectory:     notesDir,
+		Editor:             "", // Will fall back to $EDITOR
+		PreviewCommand:     "", // Will use internal preview
+		AddFrontmatter:     false, // Default to simple markdown headers
+		InitialReverseSort: false, // Default to normal sort order
 	}
 }
 
@@ -243,12 +245,13 @@ func initialModel(startupTag string) model {
 		oldInput:       oldi,
 		cwd:            cwd,
 		config:         config,
+		reversedSort:   config.InitialReverseSort,
 	}
 
 	// Apply initial sort if configured
 	if config.InitialSort != "" {
 		switch config.InitialSort {
-		case "date", "modified", "title":
+		case "date", "modified", "title", "denote":
 			m.currentSort = config.InitialSort
 			m.files = m.applySorting(files)
 			m.filtered = m.files
