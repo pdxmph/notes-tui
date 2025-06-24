@@ -2101,7 +2101,7 @@ func (m model) View() string {
 			helpLine2 := hotkeyStyle.Render("[e]") + "dit" + sep +
 				hotkeyStyle.Render("[n]") + "ew note" + sep +
 				hotkeyStyle.Render("[d]") + "aily note" + sep +
-				hotkeyStyle.Render("[R]") + "ename" + sep +
+				"Denote " + hotkeyStyle.Render("[R]") + "ename" + sep +
 				hotkeyStyle.Render("[X]") + " delete" + sep +
 				hotkeyStyle.Render("[q]") + "uit"
 			
