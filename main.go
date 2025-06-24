@@ -471,6 +471,7 @@ func renameToDenoteName(filepath string, config Config) (string, error) {
 	
 	// Extract tags from frontmatter
 	var tags []string
+	var yamlDate *time.Time
 	lines := strings.Split(string(content), "\n")
 	inFrontmatter := false
 	
@@ -484,6 +485,29 @@ func renameToDenoteName(filepath string, config Config) (string, error) {
 		}
 		if inFrontmatter && trimmed == "---" {
 			break
+		}
+		
+		// Look for date in frontmatter
+		if inFrontmatter && strings.HasPrefix(trimmed, "date:") {
+			datePart := strings.TrimPrefix(trimmed, "date:")
+			datePart = strings.TrimSpace(datePart)
+			
+			// Try to parse the date - support multiple formats
+			dateFormats := []string{
+				"2006-01-02T15:04:05Z07:00", // ISO 8601 with timezone
+				"2006-01-02T15:04:05",       // ISO 8601 without timezone
+				"2006-01-02 15:04:05",       // Space separated datetime
+				"2006-01-02",                // Date only
+				"01/02/2006",                // US format
+				"02/01/2006",                // European format
+			}
+			
+			for _, format := range dateFormats {
+				if parsedDate, err := time.Parse(format, datePart); err == nil {
+					yamlDate = &parsedDate
+					break
+				}
+			}
 		}
 		
 		// Look for tags in frontmatter
@@ -573,9 +597,16 @@ func renameToDenoteName(filepath string, config Config) (string, error) {
 			return "", fmt.Errorf("failed to get file info: %w", err)
 		}
 		
-		// Use modification time as the timestamp for the identifier
-		modTime := fileInfo.ModTime()
-		newFilename, identifier = generateDenoteName(title, tags, modTime)
+		// Use modification time as the default timestamp
+		timestamp := fileInfo.ModTime()
+		
+		// If we have a YAML date and it's earlier than the mod time, use it
+		if yamlDate != nil && yamlDate.Before(timestamp) {
+			timestamp = *yamlDate
+		}
+		
+		// Use the earlier timestamp for the identifier
+		newFilename, identifier = generateDenoteName(title, tags, timestamp)
 	}
 	
 	// Create new path
