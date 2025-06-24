@@ -1,12 +1,27 @@
 # Binary
 notes-tui
 
+# Build and release artifacts
+dist/
+*.tar.gz
+*.zip
+checksums.txt
+
 # Test directory
 test-notes/
+
+# Backup directories
+*-backup/
+backup-*/
 
 # Test files
 test-*.toml
 test-*.sh
+
+# Temporary scripts and logs
+denote-converter.sh
+conversion-*.sh
+*.log
 
 # Config files (user specific)
 config.toml
@@ -27,5 +42,19 @@ config.toml
 # Go workspace file
 go.work
 
-# config file
-config.toml
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Linux
+.directory
+
+# Windows
+Thumbs.db
+Desktop.ini
