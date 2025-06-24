@@ -173,6 +173,8 @@ type model struct {
 	// Rename state
 	renameMode     bool            // are we renaming a file to Denote format?
 	renameFile     string          // file being renamed
+	// Navigation state
+	waitingForSecondG bool          // waiting for second 'g' in 'gg' sequence
 }
 
 // Message for preview content
@@ -1288,6 +1290,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "esc":
+			// Reset waiting for second g state
+			m.waitingForSecondG = false
 			if m.searchMode {
 				// Exit search mode
 				m.searchMode = false
@@ -1646,14 +1650,41 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor--
 				// Don't auto-load preview on cursor movement
 			}
+			// Reset waiting for second g state on other navigation
+			m.waitingForSecondG = false
 
 		case "down", "j":
 			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 				// Don't auto-load preview on cursor movement
 			}
+			// Reset waiting for second g state on other navigation
+			m.waitingForSecondG = false
+
+		case "G":
+			// Jump to bottom of list
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && len(m.filtered) > 0 {
+				m.cursor = len(m.filtered) - 1
+			}
+			// Reset waiting for second g state
+			m.waitingForSecondG = false
+
+		case "g":
+			// Handle gg sequence for jump to top
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
+				if m.waitingForSecondG {
+					// Second g - jump to top
+					m.cursor = 0
+					m.waitingForSecondG = false
+				} else {
+					// First g - start waiting for second g
+					m.waitingForSecondG = true
+				}
+			}
 
 		case "enter":
+			// Reset waiting for second g state
+			m.waitingForSecondG = false
 			if m.deleteMode {
 				// Don't delete on enter - require explicit 'y' confirmation
 				return m, nil
