@@ -354,10 +354,9 @@ func extractNoteTitle(filepath string) string {
 }
 
 // Generate Denote-style filename from title
-func generateDenoteName(title string, tags []string) (filename string, identifier string) {
-	// Get current timestamp
-	now := time.Now()
-	identifier = now.Format("20060102T150405")
+func generateDenoteName(title string, tags []string, timestamp time.Time) (filename string, identifier string) {
+	// Use provided timestamp
+	identifier = timestamp.Format("20060102T150405")
 	
 	// Sanitize title for filename
 	// Convert to lowercase
@@ -568,8 +567,15 @@ func renameToDenoteName(filepath string, config Config) (string, error) {
 			newFilename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
 		}
 	} else {
-		// Generate new filename with current timestamp
-		newFilename, identifier = generateDenoteName(title, tags)
+		// Get file modification time to preserve original timestamp
+		fileInfo, err := os.Stat(filepath)
+		if err != nil {
+			return "", fmt.Errorf("failed to get file info: %w", err)
+		}
+		
+		// Use modification time as the timestamp for the identifier
+		modTime := fileInfo.ModTime()
+		newFilename, identifier = generateDenoteName(title, tags, modTime)
 	}
 	
 	// Create new path
@@ -711,7 +717,7 @@ func getDailyNoteFilename(config Config) (string, string) {
 	if config.DenoteFilenames {
 		// Use Denote format for daily notes
 		// Tags could be "daily" by default
-		filename, identifier := generateDenoteName("daily", []string{"daily"})
+		filename, identifier := generateDenoteName("daily", []string{"daily"}, time.Now())
 		return filename, identifier
 	}
 	// Traditional format
@@ -1216,7 +1222,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var filename string
 				var identifier string
 				if m.config.DenoteFilenames {
-					filename, identifier = generateDenoteName(title, []string{})
+					filename, identifier = generateDenoteName(title, []string{}, time.Now())
 				} else {
 					filename = titleToFilename(title)
 					identifier = ""
@@ -1602,7 +1608,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						var filename string
 						var identifier string
 						if m.config.DenoteFilenames {
-							filename, identifier = generateDenoteName(title, []string{})
+							filename, identifier = generateDenoteName(title, []string{}, time.Now())
 						} else {
 							filename = titleToFilename(title)
 							identifier = ""
@@ -1656,7 +1662,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				var filename string
 				var identifier string
 				if m.config.DenoteFilenames {
-					filename, identifier = generateDenoteName(title, tags)
+					filename, identifier = generateDenoteName(title, tags, time.Now())
 				} else {
 					filename = titleToFilename(title)
 					identifier = ""
