@@ -2213,6 +2213,7 @@ func (m model) renderPreviewPopover() string {
 func main() {
 	// Parse command line flags
 	var tag = flag.String("tag", "", "Filter notes by tag (e.g., --tag=@mikeh)")
+	var openID = flag.String("open-id", "", "Open note with specific Denote identifier (e.g., --open-id=20241225T093015)")
 	flag.Parse()
 
 	// Load config first
@@ -2235,6 +2236,91 @@ func main() {
 			log.Printf("Warning: Could not change to configured directory %s: %v", config.NotesDirectory, err)
 			// Continue with current directory
 		}
+	}
+
+	// Handle --open-id flag
+	if *openID != "" {
+		// Validate identifier format (should be exactly 15 chars: YYYYMMDDTHHMMSS)
+		if len(*openID) != 15 {
+			fmt.Printf("Invalid identifier format. Expected 15 characters (YYYYMMDDTHHMMSS), got %d\n", len(*openID))
+			os.Exit(1)
+		}
+		
+		// Basic format validation - should be digits with T in the middle
+		if (*openID)[8] != 'T' {
+			fmt.Printf("Invalid identifier format. Expected 'T' at position 9\n")
+			os.Exit(1)
+		}
+		
+		// Find all markdown files
+		files, err := findMarkdownFiles(".")
+		if err != nil {
+			log.Fatal(err)
+		}
+		
+		// Look for file with matching Denote identifier
+		var matchedFile string
+		for _, file := range files {
+			filename := filepath.Base(file)
+			// Check if filename starts with the exact identifier followed by - or _
+			if len(filename) > 16 && strings.HasPrefix(filename, *openID) {
+				// Make sure the identifier is followed by - or _ (not another digit)
+				if filename[15] == '-' || filename[15] == '_' {
+					matchedFile = file
+					break
+				}
+			}
+		}
+		
+		if matchedFile == "" {
+			fmt.Printf("No file found with identifier: %s\n", *openID)
+			os.Exit(1)
+		}
+		
+		// Open the file in editor
+		var editor string
+		var editorArgs []string
+		
+		// Use configured editor first
+		if config.Editor != "" {
+			editor, editorArgs = parseCommand(config.Editor)
+		} else {
+			// Fall back to $EDITOR environment variable
+			editor = os.Getenv("EDITOR")
+			if editor == "" {
+				// Try common editors as last resort
+				editors := []string{"vim", "nvim", "nano", "emacs", "code"}
+				for _, e := range editors {
+					if _, err := exec.LookPath(e); err == nil {
+						editor = e
+						break
+					}
+				}
+			}
+		}
+		
+		if editor == "" {
+			fmt.Printf("No editor configured. Found file: %s\n", matchedFile)
+			os.Exit(0)
+		}
+		
+		// Add the filename to the arguments
+		editorArgs = append(editorArgs, matchedFile)
+		
+		// Open the file in the editor
+		cmd := exec.Command(editor, editorArgs...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Error opening editor: %v\n", err)
+			fmt.Printf("File: %s\n", matchedFile)
+			os.Exit(1)
+		}
+		
+		// Exit after opening file
+		os.Exit(0)
 	}
 
 	p := tea.NewProgram(initialModel(*tag), tea.WithAltScreen())
