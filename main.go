@@ -152,6 +152,9 @@ type model struct {
 	tagCreateMode  bool            // are we prompting for tags during note creation?
 	tagCreateInput textinput.Model // tag input during note creation
 	pendingTitle   string          // title waiting for tags before creating note
+	// Task creation state
+	taskCreateMode  bool            // are we creating a TaskWarrior task?
+	taskCreateInput textinput.Model // task description input
 	// Sorting state
 	sortMode     bool            // are we in sort selection mode?
 	currentSort  string          // current sort method: "date", "modified", "title", "denote", or ""
@@ -236,6 +239,12 @@ func initialModel(startupTag string) model {
 	oldi.Placeholder = "Days back..."
 	oldi.CharLimit = 3
 	oldi.Width = 15
+	
+	// Create task input
+	taski := textinput.New()
+	taski.Placeholder = "Task description..."
+	taski.CharLimit = 200
+	taski.Width = 50
 
 	m := model{
 		files:          files,
@@ -245,6 +254,7 @@ func initialModel(startupTag string) model {
 		tagInput:       tagi,
 		tagCreateInput: tagci,
 		oldInput:       oldi,
+		taskCreateInput: taski,
 		cwd:            cwd,
 		config:         config,
 		reversedSort:   config.InitialReverseSort,
@@ -1298,6 +1308,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingTitle = ""
 				return m, nil
 			}
+			if m.taskCreateMode {
+				// Exit task create mode on q
+				m.taskCreateMode = false
+				m.taskCreateInput.SetValue("")
+				return m, nil
+			}
 			if m.tagMode {
 				// Exit tag mode on q
 				m.tagMode = false
@@ -1316,12 +1332,31 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "e", "ctrl+e":
 			// Open in external editor
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
 				m.selected = m.filtered[m.cursor]
 				// We'll handle the actual editor opening after we return
 				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
 					return clearSelectedMsg{}
 				})
+			}
+
+		case "ctrl+k":
+			// Create TaskWarrior task from current note
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+				// Extract Denote identifier from current file
+				currentFile := m.filtered[m.cursor]
+				filename := filepath.Base(currentFile)
+				
+				// Check if it's a Denote-formatted file
+				if len(filename) > 16 && filename[8] == 'T' && (filename[15] == '-' || filename[15] == '_') {
+					// Enter task creation mode
+					m.taskCreateMode = true
+					m.taskCreateInput.Focus()
+				} else {
+					// File doesn't have a Denote identifier
+					// Could show an error or handle differently
+					// For now, we'll just do nothing
+				}
 			}
 
 		case "esc":
@@ -1401,6 +1436,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.oldMode = false
 				m.oldInput.SetValue("")
 			}
+			if m.taskCreateMode {
+				// Exit task create mode
+				m.taskCreateMode = false
+				m.taskCreateInput.SetValue("")
+			}
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
@@ -1442,7 +1482,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Cancel deletion
 				m.deleteMode = false
 				m.deleteFile = ""
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
 				// Enter create mode
 				m.createMode = true
 				m.createInput.Focus()
@@ -1450,7 +1490,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "/":
-			if !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
+			if !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
 				// Enter search mode
 				m.searchMode = true
 				m.search.Focus()
@@ -1458,7 +1498,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "#":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
 				// Enter tag search mode
 				m.tagMode = true
 				m.tagInput.Focus()
@@ -1466,7 +1506,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "D":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
 				// Search for daily notes
 				if files, err := searchDailyNotes(m.cwd); err == nil {
 					m.filtered = files
@@ -1480,20 +1520,20 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "X":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
 				// Enter delete confirmation mode
 				m.deleteMode = true
 				m.deleteFile = m.filtered[m.cursor]
 			}
 
 		case "o":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.oldMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.oldMode && !m.taskCreateMode {
 				// Enter sort mode
 				m.sortMode = true
 			}
 
 		case "O":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.taskCreateMode {
 				// Enter old (days back) mode
 				m.oldMode = true
 				m.oldInput.Focus()
@@ -1501,7 +1541,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "R":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && m.cursor < len(m.filtered) {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
 				// Enter rename mode - rename file to Denote format
 				m.renameMode = true
 				m.renameFile = m.filtered[m.cursor]
@@ -1535,7 +1575,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.applySorting(m.filtered)
 				m.sortMode = false
 				m.cursor = 0
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
 				// First, check if a daily note already exists for today
 				if existingDaily, err := findTodaysDailyNote(m.cwd); err == nil {
 					// Daily note exists, open it
@@ -1606,7 +1646,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.filtered = m.applySorting(m.filtered)
 				m.sortMode = false
 				m.cursor = 0
-			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
 				// Search for tasks (existing functionality)
 				if files, err := searchTasks(m.cwd); err == nil {
 					m.filtered = files
@@ -1681,7 +1721,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "up", "k":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor > 0 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor > 0 {
 				m.cursor--
 				// Don't auto-load preview on cursor movement
 			}
@@ -1689,7 +1729,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.waitingForSecondG = false
 
 		case "down", "j":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && m.cursor < len(m.filtered)-1 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 				// Don't auto-load preview on cursor movement
 			}
@@ -1698,7 +1738,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "G":
 			// Jump to bottom of list
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && len(m.filtered) > 0 {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && len(m.filtered) > 0 {
 				m.cursor = len(m.filtered) - 1
 			}
 			// Reset waiting for second g state
@@ -1706,7 +1746,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "g":
 			// Handle gg sequence for jump to top
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode {
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
 				if m.waitingForSecondG {
 					// Second g - jump to top
 					m.cursor = 0
@@ -1872,6 +1912,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tagFilter = false
 					m.dailyFilter = false
 				}
+			} else if m.taskCreateMode {
+				// Create TaskWarrior task with current note's identifier
+				taskDesc := m.taskCreateInput.Value()
+				if taskDesc != "" {
+					// Get current file and extract identifier
+					currentFile := m.filtered[m.cursor]
+					filename := filepath.Base(currentFile)
+					
+					// Extract the Denote identifier (first 15 characters)
+					if len(filename) >= 15 {
+						identifier := filename[:15]
+						
+						// Create the task using TaskWarrior CLI
+						cmd := exec.Command("task", "add", taskDesc, "notesid:"+identifier)
+						output, err := cmd.CombinedOutput()
+						
+						if err == nil {
+							// Task created successfully
+							// Could show a success message in the future
+						} else {
+							// Task creation failed
+							// Could show an error message in the future
+							// For now, just log to stderr
+							fmt.Fprintf(os.Stderr, "Failed to create task: %v\n%s\n", err, output)
+						}
+					}
+				}
+				// Exit task create mode
+				m.taskCreateMode = false
+				m.taskCreateInput.SetValue("")
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
 				// Preview: use external if configured, otherwise internal
 				m.selected = m.filtered[m.cursor]
@@ -1924,6 +1994,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Handle old input
 	if m.oldMode {
 		m.oldInput, cmd = m.oldInput.Update(msg)
+	}
+
+	// Handle task creation input
+	if m.taskCreateMode {
+		m.taskCreateInput, cmd = m.taskCreateInput.Update(msg)
+		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -2066,6 +2142,20 @@ func (m model) View() string {
 		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.pendingTitle))
 		content.WriteString(fmt.Sprintf("Tags: %s\n\n", m.tagCreateInput.View()))
 		content.WriteString("[Enter] create note [Esc] create without tags")
+	} else if m.taskCreateMode {
+		// Task creation mode
+		content.WriteString("Create TaskWarrior Task\n\n")
+		// Show current file
+		currentFile := m.filtered[m.cursor]
+		filename := filepath.Base(currentFile)
+		displayName := getEnhancedDisplayName(currentFile, m.cwd, m.config.ShowTitles)
+		content.WriteString(fmt.Sprintf("Note: %s\n", displayName))
+		if len(filename) >= 15 {
+			identifier := filename[:15]
+			content.WriteString(fmt.Sprintf("ID: %s\n\n", identifier))
+		}
+		content.WriteString(fmt.Sprintf("Task: %s\n\n", m.taskCreateInput.View()))
+		content.WriteString("[Enter] create task [Esc] cancel")
 	} else if m.deleteMode {
 		// Delete confirmation mode
 		filename := getEnhancedDisplayName(m.deleteFile, m.cwd, m.config.ShowTitles)
@@ -2112,7 +2202,7 @@ func (m model) View() string {
 	}
 
 	// Add search field at bottom
-	if !m.tagMode && !m.createMode && !m.deleteMode {
+	if !m.tagMode && !m.createMode && !m.deleteMode && !m.taskCreateMode {
 		content.WriteString("\n")
 		if m.searchMode {
 			content.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
@@ -2136,6 +2226,7 @@ func (m model) View() string {
 			helpLine2 := hotkeyStyle.Render("[e]") + "dit" + sep +
 				hotkeyStyle.Render("[n]") + "ew note" + sep +
 				hotkeyStyle.Render("[d]") + "aily note" + sep +
+				hotkeyStyle.Render("[Ctrl+K]") + " task" + sep +
 				"Denote " + hotkeyStyle.Render("[R]") + "ename" + sep +
 				hotkeyStyle.Render("[X]") + " delete" + sep +
 				hotkeyStyle.Render("[q]") + "uit"
