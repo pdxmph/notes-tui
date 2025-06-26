@@ -762,6 +762,41 @@ func getDailyNoteFilename(config Config) (string, string) {
 	return today + "-daily.md", ""
 }
 
+// Find existing daily note for today regardless of format
+func findTodaysDailyNote(dir string) (string, error) {
+	today := time.Now()
+	
+	// Pattern 1: Traditional format (YYYY-MM-DD-daily.md)
+	traditionalName := today.Format("2006-01-02") + "-daily.md"
+	traditionalPath := filepath.Join(dir, traditionalName)
+	if _, err := os.Stat(traditionalPath); err == nil {
+		return traditionalPath, nil
+	}
+	
+	// Pattern 2: Denote format (YYYYMMDDTHHMMSS-daily*.md)
+	// Need to search for files starting with today's date in Denote format
+	todayDenote := today.Format("20060102")
+	
+	// Get all markdown files
+	files, err := findMarkdownFiles(dir)
+	if err != nil {
+		return "", err
+	}
+	
+	// Check each file for Denote daily note pattern
+	denotePattern := regexp.MustCompile(fmt.Sprintf(`^%sT\d{6}-daily.*\.md$`, todayDenote))
+	
+	for _, file := range files {
+		filename := filepath.Base(file)
+		if denotePattern.MatchString(filename) {
+			return file, nil
+		}
+	}
+	
+	// No daily note found for today
+	return "", os.ErrNotExist
+}
+
 // Search for files containing a specific tag using ripgrep
 func searchTag(dir, tag string) ([]string, error) {
 	// Remove # if present at the start
@@ -1501,12 +1536,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.sortMode = false
 				m.cursor = 0
 			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode {
-				// Create or open daily note (existing functionality)
-				filename, identifier := getDailyNoteFilename(m.config)
-				fullPath := filepath.Join(m.cwd, filename)
-				
-				// Check if file exists
-				if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+				// First, check if a daily note already exists for today
+				if existingDaily, err := findTodaysDailyNote(m.cwd); err == nil {
+					// Daily note exists, open it
+					m.selected = existingDaily
+					// Find and select the file in the list
+					for i, f := range m.filtered {
+						if f == existingDaily {
+							m.cursor = i
+							break
+						}
+					}
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				} else {
+					// No daily note exists, create one in the current format
+					filename, identifier := getDailyNoteFilename(m.config)
+					fullPath := filepath.Join(m.cwd, filename)
+					
 					// Create the daily note with proper formatting
 					today := time.Now().Format("Monday, January 2, 2006")
 					title := fmt.Sprintf("Daily Note - %s", today)
@@ -1537,19 +1585,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return clearSelectedMsg{}
 						})
 					}
-				} else {
-					// File exists, just open it
-					m.selected = fullPath
-					// Find and select the file
-					for i, f := range m.filtered {
-						if f == fullPath {
-							m.cursor = i
-							break
-						}
-					}
-					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-						return clearSelectedMsg{}
-					})
 				}
 			}
 
