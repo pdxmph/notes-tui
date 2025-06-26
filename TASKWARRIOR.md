@@ -4,13 +4,19 @@ This integration enables bidirectional linking between your notes and TaskWarrio
 
 ## Setup
 
-1. **Configure TaskWarrior UDA** (one-time setup):
+1. **Enable TaskWarrior support in notes-tui config**:
+```toml
+# In ~/.config/notes-tui/config.toml
+taskwarrior_support = true
+```
+
+2. **Configure TaskWarrior UDA** (one-time setup):
 ```bash
 task config uda.notesid.type string
 task config uda.notesid.label "Notes ID"
 ```
 
-2. **Install the wrapper script**:
+3. **Install the wrapper script**:
 ```bash
 # Simple version
 cp task2notes ~/bin/  # or anywhere in your PATH

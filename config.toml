@@ -24,3 +24,6 @@ preview_command = "/opt/homebrew/bin/glow -p -w 90"
 add_frontmatter = true
 
 initial_sort = "modified"
+
+# Enable TaskWarrior integration
+taskwarrior_support = true

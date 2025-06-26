@@ -55,6 +55,12 @@ denote_filenames = false
 # If false, shows filenames as before
 show_titles = false
 
+# Enable TaskWarrior integration (optional)
+# If true, enables Ctrl+K to create TaskWarrior tasks from notes
+# Requires TaskWarrior to be installed and notesid UDA configured
+# See TASKWARRIOR.md for setup instructions
+taskwarrior_support = false
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim

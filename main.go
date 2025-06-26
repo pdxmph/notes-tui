@@ -32,6 +32,7 @@ type Config struct {
 	DenoteFilenames    bool   `toml:"denote_filenames"`
 	ShowTitles         bool   `toml:"show_titles"`
 	PromptForTags      bool   `toml:"prompt_for_tags"`
+	TaskwarriorSupport bool   `toml:"taskwarrior_support"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -51,6 +52,7 @@ func DefaultConfig() Config {
 		PreviewCommand:     "", // Will use internal preview
 		AddFrontmatter:     false, // Default to simple markdown headers
 		InitialReverseSort: false, // Default to normal sort order
+		TaskwarriorSupport: false, // Default to disabled
 	}
 }
 
@@ -1341,8 +1343,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "ctrl+k":
-			// Create TaskWarrior task from current note
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+			// Create TaskWarrior task from current note (if enabled)
+			if m.config.TaskwarriorSupport && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
 				// Extract Denote identifier from current file
 				currentFile := m.filtered[m.cursor]
 				filename := filepath.Base(currentFile)
@@ -2225,9 +2227,14 @@ func (m model) View() string {
 			
 			helpLine2 := hotkeyStyle.Render("[e]") + "dit" + sep +
 				hotkeyStyle.Render("[n]") + "ew note" + sep +
-				hotkeyStyle.Render("[d]") + "aily note" + sep +
-				hotkeyStyle.Render("[Ctrl+K]") + " task" + sep +
-				"Denote " + hotkeyStyle.Render("[R]") + "ename" + sep +
+				hotkeyStyle.Render("[d]") + "aily note" + sep
+			
+			// Add TaskWarrior help if enabled
+			if m.config.TaskwarriorSupport {
+				helpLine2 += hotkeyStyle.Render("[Ctrl+K]") + " task" + sep
+			}
+			
+			helpLine2 += "Denote " + hotkeyStyle.Render("[R]") + "ename" + sep +
 				hotkeyStyle.Render("[X]") + " delete" + sep +
 				hotkeyStyle.Render("[q]") + "uit"
 			
