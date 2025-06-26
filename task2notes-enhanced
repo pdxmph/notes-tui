@@ -1,0 +1,95 @@
+#!/bin/bash
+
+# task2notes - Manage TaskWarrior tasks linked to notes
+# Usage: 
+#   task2notes <task_id>           - Open note for specific task
+#   task2notes list                - List all tasks with linked notes
+#   task2notes find <note_id>      - Find tasks linked to a specific note
+
+show_usage() {
+    cat << EOF
+task2notes - Manage TaskWarrior tasks linked to notes
+
+Usage:
+    task2notes <task_id>           Open the note linked to task
+    task2notes list                List all tasks with linked notes
+    task2notes find <note_id>      Find tasks linked to a specific note
+    task2notes help                Show this help message
+
+Examples:
+    task2notes 42                  Open note for task 42
+    task2notes list                Show all tasks with notesid
+    task2notes find 20241225T093015  Find tasks for this note
+
+Requirements:
+    - TaskWarrior with notesid UDA configured
+    - notes-tui installed and in PATH
+EOF
+}
+
+# Function to open note for a task
+open_note_for_task() {
+    local task_id=$1
+    
+    # Get the notesid UDA from the task
+    local notes_id=$(task _get ${task_id}.notesid 2>/dev/null)
+    
+    # Check if we got a notes ID
+    if [ -z "$notes_id" ]; then
+        echo "Error: Task $task_id has no linked note (notesid UDA not set)"
+        exit 1
+    fi
+    
+    # Check if notes-tui is available
+    if ! command -v notes-tui &> /dev/null; then
+        echo "Error: notes-tui not found in PATH"
+        exit 1
+    fi
+    
+    # Open the note
+    echo "Opening note: $notes_id"
+    notes-tui --open-id "$notes_id"
+}
+
+# Function to list all tasks with notes
+list_tasks_with_notes() {
+    echo "Tasks with linked notes:"
+    echo "========================"
+    task notesid.any: list
+}
+
+# Function to find tasks for a specific note
+find_tasks_for_note() {
+    local note_id=$1
+    
+    if [ -z "$note_id" ]; then
+        echo "Error: Note ID required"
+        exit 1
+    fi
+    
+    echo "Tasks linked to note $note_id:"
+    echo "================================"
+    task notesid:$note_id list
+}
+
+# Main script logic
+case "${1:-}" in
+    "")
+        show_usage
+        exit 1
+        ;;
+    "help"|"-h"|"--help")
+        show_usage
+        exit 0
+        ;;
+    "list")
+        list_tasks_with_notes
+        ;;
+    "find")
+        find_tasks_for_note "$2"
+        ;;
+    *)
+        # Assume it's a task ID
+        open_note_for_task "$1"
+        ;;
+esac

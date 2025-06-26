@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# task2notes - Open a note linked to a TaskWarrior task
+# Usage: task2notes <task_id>
+
+# Check if task ID was provided
+if [ $# -eq 0 ]; then
+    echo "Usage: task2notes <task_id>"
+    echo "Opens the note linked to the specified task"
+    exit 1
+fi
+
+TASK_ID=$1
+
+# Get the notesid UDA from the task
+NOTES_ID=$(task _get ${TASK_ID}.notesid 2>/dev/null)
+
+# Check if we got a notes ID
+if [ -z "$NOTES_ID" ]; then
+    echo "Error: Task $TASK_ID has no linked note (notesid UDA not set)"
+    exit 1
+fi
+
+# Check if notes-tui is available
+if ! command -v notes-tui &> /dev/null; then
+    echo "Error: notes-tui not found in PATH"
+    exit 1
+fi
+
+# Open the note
+echo "Opening note: $NOTES_ID"
+notes-tui --open-id "$NOTES_ID"
