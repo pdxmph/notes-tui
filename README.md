@@ -89,11 +89,17 @@ preview_command = "mdcat"                                  # mdcat viewer
 - **`/`**: Search files
 - **`Enter`**: Preview (internal popover or external command if configured)
 - **`e`**: Edit in configured editor
-- **`X`**: Delete file (with confirmation)
+- **`X`**: Delete file (requires `y` to confirm)
 - **`n`**: Create new note
 - **`d`**: Create/open daily note
+- **`D`**: Show only daily notes
 - **`#`**: Search by tag
 - **`t`**: Show files with open tasks
+- **`o`**: Open sort menu
+- **`O`**: Filter notes by age (e.g., last 7 days)
+- **`R`**: Rename file to Denote format
+- **`g`** then **`g`**: Jump to top of list
+- **`G`**: Jump to bottom of list
 - **`q`**: Quit
 
 ### In Preview Mode
@@ -102,6 +108,15 @@ preview_command = "mdcat"                                  # mdcat viewer
 - **`e`**: Edit file from preview
 - **`↑↓`** or **`j/k`**: Scroll
 - **`PgUp/PgDn`** or **`Space`**: Page up/down
+
+### In Sort Menu (`o`)
+
+- **`d`**: Sort by date (newest first)
+- **`m`**: Sort by modified time (newest first)
+- **`t`**: Sort by title (alphabetical)
+- **`i`**: Sort by Denote identifier (newest first)
+- **`r`**: Reverse current sort order
+- **`Esc`**: Exit sort menu
 
 ## Features in Detail
 
