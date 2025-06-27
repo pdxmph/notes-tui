@@ -1222,7 +1222,59 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case clearSelectedMsg:
+		// Remember the file that was just edited (if any)
+		previousFile := m.selected
 		m.selected = ""
+		
+		// Refresh file list after returning from editor
+		files, err := findMarkdownFiles(m.cwd)
+		if err != nil {
+			return m, nil
+		}
+		
+		// Apply current sort
+		m.files = m.applySorting(files)
+		
+		// Reapply any active filters
+		if m.taskFilter {
+			if taskFiles, err := searchTasks(m.cwd); err == nil {
+				m.filtered = taskFiles
+			}
+		} else if m.tagFilter && m.tagInput.Value() != "" {
+			if tagFiles, err := searchTag(m.cwd, m.tagInput.Value()); err == nil {
+				m.filtered = tagFiles
+			}
+		} else if m.textFilter && m.search.Value() != "" {
+			m.filtered = filterFiles(m.files, m.search.Value())
+		} else if m.dailyFilter {
+			if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
+				m.filtered = dailyFiles
+			}
+		} else if m.oldFilter {
+			m.filtered = filterFilesByDaysOld(m.files, m.oldDays)
+		} else {
+			// No filter active, use all files
+			m.filtered = m.files
+		}
+		
+		// Apply sorting to filtered list
+		m.filtered = m.applySorting(m.filtered)
+		
+		// Try to maintain cursor position on the edited file
+		if previousFile != "" {
+			for i, f := range m.filtered {
+				if f == previousFile {
+					m.cursor = i
+					break
+				}
+			}
+		}
+		
+		// Ensure cursor is within bounds
+		if m.cursor >= len(m.filtered) && len(m.filtered) > 0 {
+			m.cursor = len(m.filtered) - 1
+		}
+		
 		return m, nil
 
 
@@ -1395,8 +1447,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = fullPath
 					// Refresh file list to include new file
 					files, _ := findMarkdownFiles(m.cwd)
-					m.files = files
-					m.filtered = files
+					m.files = m.applySorting(files)
+					m.filtered = m.files
 					// Find and select the new file
 					for i, f := range m.filtered {
 						if f == fullPath {
@@ -1614,8 +1666,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.selected = fullPath
 						// Refresh file list to include new file
 						files, _ := findMarkdownFiles(m.cwd)
-						m.files = files
-						m.filtered = files
+						m.files = m.applySorting(files)
+						m.filtered = m.files
 						// Find and select the new file
 						for i, f := range m.filtered {
 							if f == fullPath {
@@ -1687,25 +1739,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := os.Remove(m.deleteFile); err == nil {
 					// Successfully deleted, refresh file list
 					files, _ := findMarkdownFiles(m.cwd)
-					m.files = files
+					m.files = m.applySorting(files)
 					
 					// If we had filters applied, reapply them
 					if m.taskFilter {
 						if taskFiles, err := searchTasks(m.cwd); err == nil {
-							m.filtered = taskFiles
+							m.filtered = m.applySorting(taskFiles)
 						} else {
-							m.filtered = files
+							m.filtered = m.files
 						}
 					} else if m.dailyFilter {
 						if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
-							m.filtered = dailyFiles
+							m.filtered = m.applySorting(dailyFiles)
 						} else {
-							m.filtered = files
+							m.filtered = m.files
 						}
 					} else if m.search.Value() != "" {
-						m.filtered = filterFiles(files, m.search.Value())
+						m.filtered = m.applySorting(filterFiles(m.files, m.search.Value()))
 					} else {
-						m.filtered = files
+						m.filtered = m.files
 					}
 					
 					// Adjust cursor position
@@ -1833,8 +1885,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.selected = fullPath
 							// Refresh file list to include new file
 							files, _ := findMarkdownFiles(m.cwd)
-							m.files = files
-							m.filtered = files
+							m.files = m.applySorting(files)
+							m.filtered = m.files
 							// Find and select the new file
 							for i, f := range m.filtered {
 								if f == fullPath {
@@ -1887,8 +1939,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = fullPath
 					// Refresh file list to include new file
 					files, _ := findMarkdownFiles(m.cwd)
-					m.files = files
-					m.filtered = files
+					m.files = m.applySorting(files)
+					m.filtered = m.files
 					// Find and select the new file
 					for i, f := range m.filtered {
 						if f == fullPath {
