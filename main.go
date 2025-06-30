@@ -1407,35 +1407,45 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskCreateMode = false
 				m.taskCreateInput.SetValue("")
 			}
+			var filterCleared bool
 			if m.taskFilter {
 				// Clear task filter
 				m.taskFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				filterCleared = true
 			}
 			if m.tagFilter {
 				// Clear tag filter
 				m.tagFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				filterCleared = true
 			}
 			if m.textFilter {
 				// Clear text filter
 				m.textFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				filterCleared = true
 			}
 			if m.dailyFilter {
 				// Clear daily filter
 				m.dailyFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				filterCleared = true
 			}
 			if m.oldFilter {
 				// Clear old filter
 				m.oldFilter = false
 				m.filtered = m.files
 				m.cursor = 0
+				filterCleared = true
+			}
+			// Show filter cleared message if any filter was active
+			if filterCleared {
+				cmds = append(cmds, ui.ShowInfo(ui.MsgFilterCleared))
 			}
 			if m.renameMode {
 				// Exit rename mode
@@ -1482,6 +1492,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.tagFilter = false // Clear tag filter when switching to daily filter
 					m.textFilter = false // Clear text filter when switching to daily filter
 					m.oldFilter = false // Clear old filter when switching to daily filter
+					
+					// Show status message
+					var cmds []tea.Cmd
+					if len(files) == 0 {
+						cmds = append(cmds, ui.ShowInfo(ui.MsgNoMatches))
+					} else {
+						cmds = append(cmds, ui.ShowSuccess(ui.MsgDailyFilter))
+					}
+					return m, tea.Batch(cmds...)
 				}
 			}
 
@@ -1622,6 +1641,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.textFilter = false // Clear text filter when switching to task filter
 					m.dailyFilter = false // Clear daily filter when switching to task filter
 					m.oldFilter = false // Clear old filter when switching to task filter
+					
+					// Show status message
+					var cmds []tea.Cmd
+					if len(files) == 0 {
+						cmds = append(cmds, ui.ShowInfo(ui.MsgNoMatches))
+					} else {
+						cmds = append(cmds, ui.ShowSuccess(ui.MsgTaskFilter))
+					}
+					return m, tea.Batch(cmds...)
 				}
 			}
 
@@ -1738,6 +1766,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if m.tagMode {
 				// Search for the tag
 				tag := m.tagInput.Value()
+				var cmds []tea.Cmd
 				if tag != "" {
 					if files, err := searchTag(m.cwd, tag); err == nil {
 						m.filtered = files
@@ -1747,14 +1776,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.textFilter = false // Clear text filter when switching to tag filter
 						m.dailyFilter = false // Clear daily filter when switching to tag filter
 						m.oldFilter = false // Clear old filter when switching to tag filter
+						
+						// Show status message
+						if len(files) == 0 {
+							cmds = append(cmds, ui.ShowInfo(ui.MsgNoMatches))
+						} else {
+							cmds = append(cmds, ui.ShowSuccess(fmt.Sprintf(ui.MsgTagFilter, tag)))
+						}
 					}
 				}
 				// Exit tag mode
 				m.tagMode = false
 				m.tagInput.SetValue("")
+				if len(cmds) > 0 {
+					return m, tea.Batch(cmds...)
+				}
 			} else if m.oldMode {
 				// Apply days old filter
 				daysStr := m.oldInput.Value()
+				var cmds []tea.Cmd
 				if daysStr != "" {
 					if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
 						filteredFiles := filterFilesByDaysOld(m.files, days)
@@ -1767,11 +1807,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.tagFilter = false
 						m.textFilter = false
 						m.dailyFilter = false
+						
+						// Show status message
+						if len(filteredFiles) == 0 {
+							cmds = append(cmds, ui.ShowInfo(ui.MsgNoMatches))
+						} else {
+							cmds = append(cmds, ui.ShowSuccess(fmt.Sprintf(ui.MsgDaysFilter, days)))
+						}
 					}
 				}
 				// Exit old mode
 				m.oldMode = false
 				m.oldInput.SetValue("")
+				if len(cmds) > 0 {
+					return m, tea.Batch(cmds...)
+				}
 			} else if m.createMode {
 				// Get the title
 				title := m.createInput.Value()
@@ -1878,11 +1928,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit search mode on enter, but keep the filter active
 				m.searchMode = false
 				// If there's a search query, mark text filter as active
+				var cmds []tea.Cmd
 				if m.search.Value() != "" {
 					m.textFilter = true
 					m.taskFilter = false // Clear other filters
 					m.tagFilter = false
+					
+					// Show status message
+					if len(m.filtered) == 0 {
+						cmds = append(cmds, ui.ShowInfo(ui.MsgNoMatches))
+					} else {
+						cmds = append(cmds, ui.ShowSuccess(ui.MsgSearchApplied))
+					}
 					m.dailyFilter = false
+				}
+				if len(cmds) > 0 {
+					return m, tea.Batch(cmds...)
 				}
 			} else if m.taskCreateMode {
 				// Create TaskWarrior task with current note's identifier

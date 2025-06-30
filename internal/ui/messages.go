@@ -64,6 +64,11 @@ var (
 	MsgSearchApplied = "Search filter applied"
 	MsgFilterCleared = "Filter cleared"
 	MsgSortApplied   = "Sort applied"
+	MsgDailyFilter   = "Showing daily notes"
+	MsgTaskFilter    = "Showing notes with tasks"
+	MsgTagFilter     = "Showing notes with tag: %s"
+	MsgDaysFilter    = "Showing notes older than %d days"
+	MsgNoMatches     = "No matching notes found"
 )
 
 // Error messages
