@@ -61,6 +61,15 @@ show_titles = false
 # See TASKWARRIOR.md for setup instructions
 taskwarrior_support = false
 
+# Theme selection (optional)
+# Available themes: "default", "dark", "light", "high-contrast", "minimal"
+# "default" - Balanced colors for most terminals
+# "dark" - Optimized for dark terminals
+# "light" - Optimized for light terminals with dark text
+# "high-contrast" - Maximum contrast for accessibility
+# "minimal" - Monochrome with minimal color usage
+theme = "default"
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim

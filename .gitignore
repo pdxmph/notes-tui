@@ -1,5 +1,6 @@
 # Binary
 notes-tui
+notes-tui-test
 
 # Build and release artifacts
 dist/

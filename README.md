@@ -62,6 +62,12 @@ See `config.example.toml` for more examples.
 - **`prompt_for_tags`**: Prompt for tags when creating notes (default: false). Only works when `add_frontmatter` is true. Tags are stored as YAML array.
 - **`denote_filenames`**: Use Denote-style filenames (default: false). Format: `YYYYMMDDTHHMMSS-title.md`
 - **`show_titles`**: Show extracted titles instead of filenames in list (default: false)
+- **`theme`**: Color theme selection (default: "default"). Available themes:
+  - `"default"` - Balanced colors for most terminals
+  - `"dark"` - Optimized for dark terminals
+  - `"light"` - Optimized for light terminals with dark text
+  - `"high-contrast"` - Maximum contrast for accessibility
+  - `"minimal"` - Monochrome with minimal color usage
 
 ### Editor Examples
 

@@ -5,3 +5,4 @@ add_frontmatter = true
 denote_filenames = true
 show_titles = true
 taskwarrior_support = false  # Disabled for testing without TaskWarrior
+theme = "light"  # Test light theme

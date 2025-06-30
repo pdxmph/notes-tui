@@ -19,6 +19,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BurntSushi/toml"
+	"github.com/pdxmph/notes-tui/internal/ui"
 )
 
 // Config holds application configuration
@@ -33,6 +34,7 @@ type Config struct {
 	ShowTitles         bool   `toml:"show_titles"`
 	PromptForTags      bool   `toml:"prompt_for_tags"`
 	TaskwarriorSupport bool   `toml:"taskwarrior_support"`
+	Theme              string `toml:"theme"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -53,6 +55,7 @@ func DefaultConfig() Config {
 		AddFrontmatter:     false, // Default to simple markdown headers
 		InitialReverseSort: false, // Default to normal sort order
 		TaskwarriorSupport: false, // Default to disabled
+		Theme:              "default", // Default theme
 	}
 }
 
@@ -180,6 +183,8 @@ type model struct {
 	renameFile     string          // file being renamed
 	// Navigation state
 	waitingForSecondG bool          // waiting for second 'g' in 'gg' sequence
+	// UI integration
+	ui              *ui.ModelIntegration
 }
 
 // Message for preview content
@@ -279,6 +284,24 @@ func initialModel(startupTag string) model {
 			m.tagFilter = true
 			m.cursor = 0
 		}
+	}
+
+	// Initialize UI integration
+	m.ui = &ui.ModelIntegration{
+		Files:              m.files,
+		Filtered:           m.filtered,
+		Cursor:             m.cursor,
+		CWD:                m.cwd,
+		ShowTitles:         config.ShowTitles,
+		DenoteFilenames:    config.DenoteFilenames,
+		TaskwarriorSupport: config.TaskwarriorSupport,
+		ThemeName:          config.Theme,
+		Search:             m.search,
+		CreateInput:        m.createInput,
+		TagInput:           m.tagInput,
+		TagCreateInput:     m.tagCreateInput,
+		TaskCreateInput:    m.taskCreateInput,
+		OldInput:           m.oldInput,
 	}
 
 	return m
@@ -1047,133 +1070,6 @@ func (m model) Init() tea.Cmd {
 }
 
 // Simple markdown renderer for fast preview
-func renderSimpleMarkdown(content string, width int) string {
-	lines := strings.Split(content, "\n")
-	var result []string
-	
-	// Skip YAML frontmatter
-	startIdx := 0
-	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
-		// Find the closing ---
-		for i := 1; i < len(lines); i++ {
-			if strings.TrimSpace(lines[i]) == "---" {
-				startIdx = i + 1
-				break
-			}
-		}
-	}
-	
-	// Define styles
-	h1Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
-	h2Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("14"))
-	h3Style := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("6"))
-	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	bulletStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	
-	inCodeBlock := false
-	
-	for i := startIdx; i < len(lines); i++ {
-		line := lines[i]
-		// Handle code blocks
-		if strings.HasPrefix(line, "```") {
-			inCodeBlock = !inCodeBlock
-			if inCodeBlock {
-				result = append(result, codeStyle.Render("─────────────────────"))
-			} else {
-				result = append(result, codeStyle.Render("─────────────────────"))
-			}
-			continue
-		}
-		
-		if inCodeBlock {
-			result = append(result, codeStyle.Render(line))
-			continue
-		}
-		
-		// Handle headers
-		if strings.HasPrefix(line, "# ") {
-			result = append(result, h1Style.Render(strings.TrimPrefix(line, "# ")))
-		} else if strings.HasPrefix(line, "## ") {
-			result = append(result, h2Style.Render(strings.TrimPrefix(line, "## ")))
-		} else if strings.HasPrefix(line, "### ") {
-			result = append(result, h3Style.Render(strings.TrimPrefix(line, "### ")))
-		} else if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
-			// Handle bullet points
-			bullet := bulletStyle.Render("•")
-			content := strings.TrimPrefix(strings.TrimPrefix(line, "- "), "* ")
-			result = append(result, fmt.Sprintf("%s %s", bullet, content))
-		} else if strings.HasPrefix(line, "> ") {
-			// Handle blockquotes
-			quoteLine := strings.TrimPrefix(line, "> ")
-			result = append(result, lipgloss.NewStyle().Italic(true).Foreground(lipgloss.Color("8")).Render("│ " + quoteLine))
-		} else if strings.TrimSpace(line) == "---" || strings.TrimSpace(line) == "***" {
-			// Handle horizontal rules
-			result = append(result, strings.Repeat("─", width-6))
-		} else {
-			// Handle inline formatting
-			formatted := line
-			
-			// Bold
-			for strings.Contains(formatted, "**") {
-				start := strings.Index(formatted, "**")
-				if start == -1 {
-					break
-				}
-				end := strings.Index(formatted[start+2:], "**")
-				if end == -1 {
-					break
-				}
-				end += start + 2
-				
-				before := formatted[:start]
-				bold := lipgloss.NewStyle().Bold(true).Render(formatted[start+2:end])
-				after := formatted[end+2:]
-				formatted = before + bold + after
-			}
-			
-			// Italic
-			for strings.Contains(formatted, "*") && !strings.Contains(formatted, "**") {
-				start := strings.Index(formatted, "*")
-				if start == -1 {
-					break
-				}
-				end := strings.Index(formatted[start+1:], "*")
-				if end == -1 {
-					break
-				}
-				end += start + 1
-				
-				before := formatted[:start]
-				italic := lipgloss.NewStyle().Italic(true).Render(formatted[start+1:end])
-				after := formatted[end+1:]
-				formatted = before + italic + after
-			}
-			
-			// Inline code
-			for strings.Contains(formatted, "`") {
-				start := strings.Index(formatted, "`")
-				if start == -1 {
-					break
-				}
-				end := strings.Index(formatted[start+1:], "`")
-				if end == -1 {
-					break
-				}
-				end += start + 1
-				
-				before := formatted[:start]
-				code := codeStyle.Render(formatted[start+1:end])
-				after := formatted[end+1:]
-				formatted = before + code + after
-			}
-			
-			result = append(result, formatted)
-		}
-	}
-	
-	return strings.Join(result, "\n")
-}
-
 // Load preview content for popover (with simple markdown rendering)
 func (m *model) loadPreviewForPopover() tea.Cmd {
 	if m.cursor >= len(m.filtered) || m.cursor < 0 {
@@ -1194,7 +1090,7 @@ func (m *model) loadPreviewForPopover() tea.Cmd {
 		
 		// Use simple markdown renderer
 		popoverContentWidth := (width * 80 / 100) - 6
-		rendered := renderSimpleMarkdown(string(content), popoverContentWidth)
+		rendered := ui.RenderSimpleMarkdown(string(content), popoverContentWidth)
 		
 		return previewLoadedMsg{
 			content: rendered,
@@ -1211,6 +1107,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		// Update UI dimensions
+		if m.ui != nil {
+			m.ui.UpdateSize(msg.Width, msg.Height)
+		}
 		// If in preview mode, reload with new dimensions
 		if m.previewMode {
 			return m, m.loadPreviewForPopover()
@@ -1219,6 +1119,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case previewLoadedMsg:
 		m.previewContent = msg.content
+		return m, nil
+
+	case ui.StatusMsg:
+		if m.ui != nil {
+			m.ui.HandleStatusMsg(msg)
+		}
+		return m, nil
+
+	case ui.ClearStatusMsg:
+		if m.ui != nil {
+			m.ui.HandleClearStatusMsg()
+		}
 		return m, nil
 
 	case clearSelectedMsg:
@@ -1736,6 +1648,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "y":
 			if m.deleteMode {
 				// Confirm deletion
+				deletedFile := filepath.Base(m.deleteFile)
 				if err := os.Remove(m.deleteFile); err == nil {
 					// Successfully deleted, refresh file list
 					files, _ := findMarkdownFiles(m.cwd)
@@ -1768,6 +1681,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							m.cursor = 0
 						}
 					}
+					// Show success message
+					cmds = append(cmds, ui.ShowSuccess(fmt.Sprintf("Deleted %s", deletedFile)))
+				} else {
+					// Show error message
+					cmds = append(cmds, ui.ShowError(fmt.Sprintf("Failed to delete %s", deletedFile)))
 				}
 				// Exit delete mode regardless of success/failure
 				m.deleteMode = false
@@ -2111,191 +2029,62 @@ func (m model) openInPreview() *exec.Cmd {
 	return cmd
 }
 func (m model) View() string {
-	if m.width == 0 || m.height == 0 {
-		return "Loading..."
-	}
-
-	// If in preview mode, show the popover
-	if m.previewMode {
-		return m.renderPreviewPopover()
-	}
-
-	// Calculate margins (15% each side)
-	marginSize := m.width * 15 / 100
-	contentWidth := m.width - (marginSize * 2)
+	// Sync state with UI integration
+	m.syncUIState()
 	
-	// Create main content style with margins
-	contentStyle := lipgloss.NewStyle().
-		Width(contentWidth).
-		MarginLeft(marginSize).
-		MarginRight(marginSize)
+	// Use new UI system
+	return m.ui.Render()
+}
 
-	// Build content
-	var content strings.Builder
+// syncUIState synchronizes the model state with the UI integration
+func (m *model) syncUIState() {
+	if m.ui == nil {
+		return
+	}
 	
-	// Header
-	header := fmt.Sprintf("Notes (%d files)", len(m.filtered))
-	if m.taskFilter {
-		header += " - [Tasks]"
-	}
-	if m.tagFilter {
-		header += " - [Tag]"
-	}
-	if m.textFilter {
-		header += " - [Search]"
-	}
-	if m.dailyFilter {
-		header += " - [Daily]"
-	}
-	if m.oldFilter {
-		header += fmt.Sprintf(" - [Last %d days]", m.oldDays)
-	}
-	if m.currentSort != "" {
-		sortLabel := ""
-		switch m.currentSort {
-		case "date":
-			sortLabel = "Date"
-		case "modified":
-			sortLabel = "Modified"
-		case "title":
-			sortLabel = "Title"
-		case "denote":
-			sortLabel = "Denote"
-		}
-		if m.reversedSort {
-			sortLabel += " (reversed)"
-		}
-		header += fmt.Sprintf(" - [Sort: %s]", sortLabel)
-	}
-	content.WriteString(lipgloss.NewStyle().Bold(true).Render(header) + "\n\n")
-
-	if m.tagMode {
-		// Tag search mode
-		content.WriteString("Search by Tag\n\n")
-		content.WriteString(fmt.Sprintf("Tag: %s\n\n", m.tagInput.View()))
-		content.WriteString("[Enter] search [Esc] cancel")
-	} else if m.sortMode {
-		// Sort selection mode
-		content.WriteString("Sort Files\n\n")
-		content.WriteString("Choose sort method:\n")
-		content.WriteString("[d] Date  [m] Modified  [t] Title  [i] Denote  [r] Reverse\n\n")
-		content.WriteString("[Esc] cancel")
-	} else if m.oldMode {
-		// Days old mode
-		content.WriteString("Filter by Days Old\n\n")
-		content.WriteString(fmt.Sprintf("Days back: %s\n\n", m.oldInput.View()))
-		content.WriteString("[Enter] apply filter [Esc] cancel")
-	} else if m.createMode {
-		// Create mode
-		content.WriteString("Create New Note\n\n")
-		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.createInput.View()))
-		content.WriteString("[Enter] create [Esc] cancel")
-	} else if m.tagCreateMode {
-		// Tag creation mode
-		content.WriteString("Add Tags to New Note\n\n")
-		content.WriteString(fmt.Sprintf("Title: %s\n\n", m.pendingTitle))
-		content.WriteString(fmt.Sprintf("Tags: %s\n\n", m.tagCreateInput.View()))
-		content.WriteString("[Enter] create note [Esc] create without tags")
-	} else if m.taskCreateMode {
-		// Task creation mode
-		content.WriteString("Create TaskWarrior Task\n\n")
-		// Show current file
-		currentFile := m.filtered[m.cursor]
-		filename := filepath.Base(currentFile)
-		displayName := getEnhancedDisplayName(currentFile, m.cwd, m.config.ShowTitles)
-		content.WriteString(fmt.Sprintf("Note: %s\n", displayName))
-		if len(filename) >= 15 {
-			identifier := filename[:15]
-			content.WriteString(fmt.Sprintf("ID: %s\n\n", identifier))
-		}
-		content.WriteString(fmt.Sprintf("Task: %s\n\n", m.taskCreateInput.View()))
-		content.WriteString("[Enter] create task [Esc] cancel")
-	} else if m.deleteMode {
-		// Delete confirmation mode
-		filename := getEnhancedDisplayName(m.deleteFile, m.cwd, m.config.ShowTitles)
-		content.WriteString("Delete Note\n\n")
-		content.WriteString(fmt.Sprintf("Delete '%s'?\n\n", filename))
-		content.WriteString("[y] yes [n] no [Esc] cancel")
-	} else if len(m.filtered) == 0 && m.searchMode && m.search.Value() != "" {
-		content.WriteString("No files match your search.\n\n")
-	} else if len(m.filtered) == 0 && !m.searchMode {
-		content.WriteString("No files found.\n\n")
-	} else if len(m.files) == 0 {
-		content.WriteString("No markdown files found.\n\n")
-	} else {
-		// Show file list
-		maxVisible := m.height - 8 // Leave room for header, search, and help
-		startIdx := 0
-		
-		// Adjust view window if cursor is outside
-		if m.cursor >= maxVisible {
-			startIdx = m.cursor - maxVisible + 1
-		}
-		
-		for i := startIdx; i < len(m.filtered) && i < startIdx+maxVisible; i++ {
-			cursor := "  "
-			if m.cursor == i {
-				cursor = "> "
-			}
-			
-			displayName := getEnhancedDisplayName(m.filtered[i], m.cwd, m.config.ShowTitles)
-			// Truncate if too long
-			maxLen := contentWidth - 3
-			if len(displayName) > maxLen {
-				displayName = displayName[:maxLen-3] + "..."
-			}
-			content.WriteString(fmt.Sprintf("%s%s\n", cursor, displayName))
-		}
-		
-		if len(m.filtered) > maxVisible {
-			remaining := len(m.filtered) - startIdx - maxVisible
-			if remaining > 0 {
-				content.WriteString(fmt.Sprintf("\n... %d more files\n", remaining))
-			}
-		}
-	}
-
-	// Add search field at bottom
-	if !m.tagMode && !m.createMode && !m.deleteMode && !m.taskCreateMode {
-		content.WriteString("\n")
-		if m.searchMode {
-			content.WriteString(fmt.Sprintf("Search: %s", m.search.View()))
-		} else {
-			// Help text
-			helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-			hotkeyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true) // Orange color for hotkeys
-			sepStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("236")) // Darker separator
-			
-			// Build help text with colored hotkeys and separators
-			sep := sepStyle.Render(" • ")
-			
-			helpLine1 := hotkeyStyle.Render("[/]") + " search" + sep +
-				hotkeyStyle.Render("[Enter]") + " preview" + sep +
-				"all " + hotkeyStyle.Render("[D]") + "aily" + sep +
-				"open " + hotkeyStyle.Render("[t]") + "asks" + sep +
-				hotkeyStyle.Render("[#]") + " tags" + sep +
-				"s" + hotkeyStyle.Render("[o]") + "rt" + sep +
-				"days " + hotkeyStyle.Render("[O]") + "ld"
-			
-			helpLine2 := hotkeyStyle.Render("[e]") + "dit" + sep +
-				hotkeyStyle.Render("[n]") + "ew note" + sep +
-				hotkeyStyle.Render("[d]") + "aily note" + sep
-			
-			// Add TaskWarrior help if enabled
-			if m.config.TaskwarriorSupport {
-				helpLine2 += hotkeyStyle.Render("[Ctrl+K]") + " task" + sep
-			}
-			
-			helpLine2 += "Denote " + hotkeyStyle.Render("[R]") + "ename" + sep +
-				hotkeyStyle.Render("[X]") + " delete" + sep +
-				hotkeyStyle.Render("[q]") + "uit"
-			
-			content.WriteString("\n" + helpStyle.Render(helpLine1))
-			content.WriteString("\n" + helpStyle.Render(helpLine2))
-		}
-	}
-
-	return contentStyle.Render(content.String())
+	// Update all UI state fields
+	m.ui.Files = m.files
+	m.ui.Filtered = m.filtered
+	m.ui.Cursor = m.cursor
+	m.ui.Selected = m.selected
+	m.ui.Width = m.width
+	m.ui.Height = m.height
+	
+	// Update mode flags
+	m.ui.SearchMode = m.searchMode
+	m.ui.CreateMode = m.createMode
+	m.ui.TagMode = m.tagMode
+	m.ui.TagCreateMode = m.tagCreateMode
+	m.ui.TaskCreateMode = m.taskCreateMode
+	m.ui.PreviewMode = m.previewMode
+	m.ui.DeleteMode = m.deleteMode
+	m.ui.SortMode = m.sortMode
+	m.ui.OldMode = m.oldMode
+	m.ui.RenameMode = m.renameMode
+	
+	// Update inputs
+	m.ui.Search = m.search
+	m.ui.CreateInput = m.createInput
+	m.ui.TagInput = m.tagInput
+	m.ui.TagCreateInput = m.tagCreateInput
+	m.ui.TaskCreateInput = m.taskCreateInput
+	m.ui.OldInput = m.oldInput
+	
+	// Update other state
+	m.ui.PreviewContent = m.previewContent
+	m.ui.PreviewFile = m.previewFile
+	m.ui.PreviewScroll = m.previewScroll
+	m.ui.DeleteFile = m.deleteFile
+	m.ui.RenameFile = m.renameFile
+	m.ui.PendingTitle = m.pendingTitle
+	m.ui.CurrentSort = m.currentSort
+	m.ui.ReversedSort = m.reversedSort
+	m.ui.OldDays = m.oldDays
+	m.ui.TextFilter = m.textFilter
+	m.ui.TagFilter = m.tagFilter
+	m.ui.TaskFilter = m.taskFilter
+	m.ui.DailyFilter = m.dailyFilter
+	m.ui.OldFilter = m.oldFilter
 }
 
 func (m model) renderPreviewPopover() string {
