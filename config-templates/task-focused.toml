@@ -1,0 +1,88 @@
+# Task-Oriented User Configuration
+# Optimized for GTD and task management workflows
+
+# Core settings
+notes_directory = "~/work/notes"
+editor = "code --wait"  # or "nvim", "subl -w"
+
+# Denote settings
+denote_filenames = true
+add_frontmatter = true
+prompt_for_tags = true
+show_titles = true
+
+# Integration - IMPORTANT
+taskwarrior_support = true  # Enable Ctrl+K
+preview_command = ""
+
+# Visual settings
+theme = "high-contrast"  # Clear task visibility
+
+# Task-specific settings
+[tasks]
+default_priority = "M"  # L, M, H
+default_project = "inbox"
+auto_schedule = true
+include_context = true
+
+# Daily note template
+[daily_template]
+content = """
+# {{date}} - {{weekday}}
+
+## Morning Planning
+- [ ] Review calendar
+- [ ] Set top 3 priorities
+- [ ] Check blocked tasks
+
+## Tasks
+### High Priority
+- [ ] 
+
+### Medium Priority
+- [ ] 
+
+### Low Priority
+- [ ] 
+
+## Notes
+
+## End of Day Review
+- [ ] Update task status
+- [ ] Plan tomorrow
+- [ ] Clear inbox
+"""
+
+# Project templates
+[templates.project]
+content = """
+# Project: {{title}}
+
+## Objective
+
+## Success Criteria
+
+## Tasks
+- [ ] 
+
+## Resources
+
+## Timeline
+"""
+
+# Meeting template
+[templates.meeting]
+content = """
+# Meeting: {{title}}
+Date: {{date}}
+Attendees: 
+
+## Agenda
+
+## Notes
+
+## Action Items
+- [ ] 
+
+## Follow-up
+"""

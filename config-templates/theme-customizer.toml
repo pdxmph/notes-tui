@@ -1,0 +1,78 @@
+# Theme Customizer Configuration
+# For users with specific visual needs or preferences
+
+# Core settings
+notes_directory = "~/notes"
+editor = "code --wait"
+
+# Denote settings
+denote_filenames = true
+add_frontmatter = false
+prompt_for_tags = false
+show_titles = true
+
+# Integration
+taskwarrior_support = false
+preview_command = ""
+
+# Visual settings - THE IMPORTANT PART
+theme = "high-contrast"  # Options: default, dark, light, high-contrast, minimal
+
+# Future: Custom theme definition
+[custom_theme]
+name = "my_theme"
+
+# Base colors
+[custom_theme.colors]
+background = "#1a1b26"      # Tokyo Night bg
+foreground = "#a9b1d6"      # Tokyo Night fg
+cursor = "#7aa2f7"          # Bright blue cursor
+selection = "#283457"       # Selection bg
+
+# UI elements
+[custom_theme.ui]
+border = "#3b4261"          # Subtle borders
+title = "#bb9af7"           # Purple titles
+help_key = "#9ece6a"        # Green for keys
+help_desc = "#a9b1d6"       # Normal text for descriptions
+status_bar = "#1a1b26"      # Match background
+
+# Semantic colors
+[custom_theme.semantic]
+success = "#9ece6a"         # Green
+error = "#f7768e"           # Red
+warning = "#e0af68"         # Yellow
+info = "#7aa2f7"            # Blue
+
+# List specific
+[custom_theme.list]
+cursor_symbol = "▶"         # or ">", "→", "●"
+cursor_color = "#7aa2f7"
+selected_bg = "#283457"
+selected_fg = "#c0caf5"
+
+# Accessibility options
+[accessibility]
+high_contrast_mode = true
+reduce_animations = false
+larger_text = false
+cursor_blink = false
+
+# Terminal-specific overrides
+[terminal_overrides]
+# For different terminal emulators
+[terminal_overrides.iterm2]
+true_color = true
+unicode = true
+
+[terminal_overrides.alacritty]
+true_color = true
+unicode = true
+
+[terminal_overrides.windows_terminal]
+true_color = true
+unicode = true
+
+[terminal_overrides.gnome_terminal]
+true_color = false  # Often limited
+unicode = true

@@ -1,0 +1,95 @@
+# Daily Journaler Configuration
+# Optimized for personal reflection and life logging
+
+# Core settings
+notes_directory = "~/journal"
+editor = "typora"  # or "iawriter", "nvim"
+
+# Denote settings
+denote_filenames = true
+add_frontmatter = true
+prompt_for_tags = true  # For mood tracking
+show_titles = true
+
+# Integration
+taskwarrior_support = false
+preview_command = "glow"
+
+# Visual settings
+theme = "dark"  # Easy on eyes for evening journaling
+
+# Journal structure
+[journal]
+daily_path = "daily/"
+weekly_path = "reviews/weekly/"
+monthly_path = "reviews/monthly/"
+yearly_path = "reviews/yearly/"
+
+# Daily template with prompts
+[daily_template]
+content = """
+# {{date}} - {{weekday}}
+
+## Morning Pages
+*Stream of consciousness - write 3 pages*
+
+## Gratitude
+1. 
+2. 
+3. 
+
+## Daily Log
+### Health
+- Sleep: /10
+- Energy: /10
+- Exercise: 
+- Nutrition: 
+
+### Mood
+- Overall: {{mood_scale}}
+- Tags: #
+
+### Accomplished
+- 
+
+### Learned
+- 
+
+### Challenges
+- 
+
+## Evening Reflection
+*What went well? What could improve?*
+
+## Tomorrow's Intention
+"""
+
+# Weekly review template
+[templates.weekly]
+content = """
+# Week {{week_number}} Review - {{date}}
+
+## Highlights
+- 
+
+## Patterns Noticed
+- 
+
+## Progress on Goals
+- 
+
+## Next Week's Focus
+- 
+"""
+
+# Mood tracking
+[mood]
+enabled = true
+scale = ["terrible", "bad", "okay", "good", "excellent"]
+default_tags = ["happy", "sad", "anxious", "calm", "energetic", "tired"]
+
+# Privacy settings
+[privacy]
+encrypt = false  # Future: GPG encryption
+backup = true
+backup_location = "~/journal-backup/"

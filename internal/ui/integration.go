@@ -31,6 +31,7 @@ type ModelIntegration struct {
 	SortMode        bool
 	OldMode         bool
 	RenameMode      bool
+	SearchFirstMode bool
 
 	// Mode-specific data
 	Search          textinput.Model
@@ -206,6 +207,9 @@ func (m *ModelIntegration) createViewState() ViewState {
 		
 		CurrentSort:    m.CurrentSort,
 		ReversedSort:   m.ReversedSort,
+		
+		SearchFirstMode: m.SearchFirstMode,
+		Search:         m.Search,
 		
 		TaskwarriorSupport: m.TaskwarriorSupport,
 	}

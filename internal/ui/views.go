@@ -38,6 +38,10 @@ type ViewState struct {
 	CurrentSort     string
 	ReversedSort    bool
 	
+	// Search-first mode state
+	SearchFirstMode bool
+	Search          textinput.Model
+	
 	// Configuration
 	TaskwarriorSupport bool
 }
@@ -101,8 +105,19 @@ func (v *ViewComposer) renderHeader() string {
 	filters := v.getActiveFilters()
 	sortInfo := v.getSortInfo()
 	
+	// Modify title for search-first mode
+	title := "Notes"
+	if v.state.SearchFirstMode {
+		searchValue := v.state.Search.Value()
+		if searchValue != "" {
+			title = "Notes - Search: " + searchValue
+		} else {
+			title = "Notes - Type to search..."
+		}
+	}
+	
 	header := Header{
-		Title:     "Notes",
+		Title:     title,
 		FileCount: len(v.state.Filtered),
 		Filters:   filters,
 		SortInfo:  sortInfo,
@@ -361,6 +376,11 @@ func (v *ViewComposer) renderLoading() string {
 func (v *ViewComposer) renderHelpBar() string {
 	contentWidth, _ := v.state.Layout.ContentArea()
 	
+	// Check if we're in search-first mode
+	if v.state.SearchFirstMode {
+		return v.renderSearchFirstHelpBar(contentWidth)
+	}
+	
 	// Split help into two lines like the original
 	// Line 1: Search, preview, and filters
 	line1Items := []HelpItem{
@@ -406,6 +426,51 @@ func (v *ViewComposer) renderHelpBar() string {
 	}
 	
 	// Join the two lines
+	return help1.View() + "\n" + help2.View()
+}
+
+// renderSearchFirstHelpBar creates the help bar for search-first mode
+func (v *ViewComposer) renderSearchFirstHelpBar(contentWidth int) string {
+	// Simplified search-first mode help
+	line1Items := []HelpItem{
+		{Key: "type", Desc: "filter"},
+		{Key: "↕", Desc: "navigate"},
+		{Key: "Enter", Desc: "preview"},
+		{Key: "ESC", Desc: "clear search"},
+	}
+	
+	line2Items := []HelpItem{
+		{Key: "Ctrl+N", Desc: "new"},
+		{Key: "Ctrl+E", Desc: "edit"},
+		{Key: "Ctrl+D", Desc: "daily"},
+		{Key: "Ctrl+T", Desc: "tasks"},
+		{Key: "Ctrl+#", Desc: "tags"},
+		{Key: "Ctrl+O", Desc: "sort"},
+	}
+	
+	// Add more Ctrl commands
+	if v.state.TaskwarriorSupport {
+		line2Items = append(line2Items, HelpItem{Key: "Ctrl+K", Desc: "task"})
+	}
+	line2Items = append(line2Items,
+		HelpItem{Key: "Ctrl+R", Desc: "rename"},
+		HelpItem{Key: "Ctrl+X", Desc: "delete"},
+		HelpItem{Key: "Ctrl+Q", Desc: "quit"},
+	)
+	
+	// Build help bars
+	help1 := HelpBar{
+		Items: line1Items,
+		Width: contentWidth,
+		Style: v.state.Theme.Help,
+	}
+	
+	help2 := HelpBar{
+		Items: line2Items,
+		Width: contentWidth,
+		Style: v.state.Theme.Help,
+	}
+	
 	return help1.View() + "\n" + help2.View()
 }
 

@@ -1,0 +1,37 @@
+# Terminal Power User Configuration
+# Optimized for speed and efficiency
+
+# Core settings
+notes_directory = "~/notes"
+editor = "nvim"  # or "vim", "emacs -nw"
+
+# Denote settings - fast creation
+denote_filenames = true
+add_frontmatter = false  # Skip for speed
+prompt_for_tags = false  # No interruptions
+show_titles = false      # Show raw filenames
+
+# Integration
+taskwarrior_support = false  # Enable if needed
+preview_command = ""  # Use internal preview
+
+# Visual settings
+theme = "minimal"  # Reduce visual noise
+
+# Performance
+cache_enabled = true
+max_files = 10000
+
+# Future: Custom keybindings
+[keybindings]
+# search = "/"
+# create = "n"
+# daily = "d"
+# preview = "Enter"
+# edit = "e"
+# quit = "q"
+
+# Future: Command aliases
+[aliases]
+# quick_note = "n --no-tags --no-frontmatter"
+# todo = "n --template=todo"

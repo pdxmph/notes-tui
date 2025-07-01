@@ -1,0 +1,51 @@
+# Zettelkasten Practitioner Configuration
+# Optimized for knowledge management and interconnected notes
+
+# Core settings
+notes_directory = "~/zettelkasten"
+editor = "obsidian"  # or "typora", "nvim"
+
+# Denote settings - full metadata
+denote_filenames = true
+add_frontmatter = true   # Rich metadata
+prompt_for_tags = true   # Careful categorization
+show_titles = true       # Human-readable display
+
+# Integration
+taskwarrior_support = false
+preview_command = "glow"  # or "bat --language=md"
+
+# Visual settings
+theme = "light"  # Better for long reading sessions
+
+# Zettelkasten structure
+[directories]
+permanent = "permanent/"
+literature = "literature/"
+fleeting = "fleeting/"
+index = "index/"
+
+# Frontmatter template
+[frontmatter]
+template = """
+---
+id: {{denote_id}}
+title: {{title}}
+date: {{date}}
+tags: {{tags}}
+type: permanent
+links: []
+---
+"""
+
+# Tag categories
+[tags]
+categories = ["concept", "person", "project", "source", "question"]
+required = true
+max_tags = 5
+
+# Future: Link management
+[linking]
+# auto_backlinks = true
+# link_preview = true
+# orphan_detection = true

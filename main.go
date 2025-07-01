@@ -35,6 +35,7 @@ type Config struct {
 	PromptForTags      bool   `toml:"prompt_for_tags"`
 	TaskwarriorSupport bool   `toml:"taskwarrior_support"`
 	Theme              string `toml:"theme"`
+	SearchFirstMode    bool   `toml:"search_first_mode"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -56,6 +57,7 @@ func DefaultConfig() Config {
 		InitialReverseSort: false, // Default to normal sort order
 		TaskwarriorSupport: false, // Default to disabled
 		Theme:              "default", // Default theme
+		SearchFirstMode:    true, // Default to search-first mode for new users
 	}
 }
 
@@ -183,6 +185,8 @@ type model struct {
 	renameFile     string          // file being renamed
 	// Navigation state
 	waitingForSecondG bool          // waiting for second 'g' in 'gg' sequence
+	// Search-first mode state
+	searchFirstMode   bool          // are we using search-first UI mode?
 	// UI integration
 	ui              *ui.ModelIntegration
 }
@@ -265,6 +269,7 @@ func initialModel(startupTag string) model {
 		cwd:            cwd,
 		config:         config,
 		reversedSort:   config.InitialReverseSort,
+		searchFirstMode: config.SearchFirstMode,
 	}
 
 	// Apply initial sort if configured
@@ -285,6 +290,12 @@ func initialModel(startupTag string) model {
 			m.cursor = 0
 		}
 	}
+	
+	// If search-first mode is enabled, start in search mode
+	if config.SearchFirstMode {
+		m.searchMode = true
+		m.search.Focus()
+	}
 
 	// Initialize UI integration
 	m.ui = &ui.ModelIntegration{
@@ -296,6 +307,7 @@ func initialModel(startupTag string) model {
 		DenoteFilenames:    config.DenoteFilenames,
 		TaskwarriorSupport: config.TaskwarriorSupport,
 		ThemeName:          config.Theme,
+		SearchFirstMode:    m.searchFirstMode,
 		Search:             m.search,
 		CreateInput:        m.createInput,
 		TagInput:           m.tagInput,
@@ -701,19 +713,92 @@ func getEnhancedDisplayName(fullPath, cwd string, showTitles bool) string {
 	return basicName
 }
 
-// Filter files based on search query
+// fuzzyMatch returns a score for how well the query matches the text
+// Returns -1 for no match, or a positive score where lower is better
+// Case insensitive fuzzy matching
+func fuzzyMatch(text, query string) int {
+	if query == "" {
+		return 0
+	}
+	
+	// Convert to lowercase for case insensitive comparison
+	// This handles ASCII and most Unicode characters properly
+	textLower := strings.ToLower(text)
+	queryLower := strings.ToLower(query)
+	
+	// First try exact substring match (best score)
+	if strings.Contains(textLower, queryLower) {
+		return strings.Index(textLower, queryLower)
+	}
+	
+	// Try fuzzy matching - all query characters must appear in order
+	textRunes := []rune(textLower)
+	queryRunes := []rune(queryLower)
+	
+	if len(queryRunes) > len(textRunes) {
+		return -1
+	}
+	
+	textIdx := 0
+	score := 0
+	
+	// For each character in the query, find it in the remaining text
+	for _, queryChar := range queryRunes {
+		found := false
+		
+		for textIdx < len(textRunes) {
+			if textRunes[textIdx] == queryChar {
+				found = true
+				textIdx++
+				break
+			}
+			textIdx++
+			score++ // Penalty for each skipped character
+		}
+		
+		if !found {
+			return -1 // Query character not found in remaining text
+		}
+	}
+	
+	// Add penalty for remaining unused characters
+	score += len(textRunes) - textIdx
+	
+	// Offset to distinguish from exact matches (which have lower scores)
+	return score + 100
+}
+
+// Filter files based on search query with fuzzy matching
+// Performs case insensitive fuzzy search on filenames
 func filterFiles(files []string, query string) []string {
 	if query == "" {
 		return files
 	}
 
-	query = strings.ToLower(query)
-	var filtered []string
+	type scoredFile struct {
+		file  string
+		score int
+	}
+	
+	var scored []scoredFile
 	
 	for _, file := range files {
-		if strings.Contains(strings.ToLower(file), query) {
-			filtered = append(filtered, file)
+		// Get filename for matching (fuzzy search is case insensitive)
+		displayName := filepath.Base(file)
+		if score := fuzzyMatch(displayName, query); score >= 0 {
+			scored = append(scored, scoredFile{file: file, score: score})
 		}
+	}
+	
+	// Sort by score (lower is better)
+	sort.Slice(scored, func(i, j int) bool {
+		return scored[i].score < scored[j].score
+	})
+	
+	// Extract just the filenames
+	var filtered []string
+	for _, item := range scored {
+		filtered = append(filtered, item.file)
 	}
 	
 	return filtered
@@ -1248,6 +1333,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+
+		// Search-first mode key handling
+		if m.searchFirstMode && !m.previewMode {
+			return m.handleSearchFirstModeKey(msg)
 		}
 
 		// Normal mode key handling
@@ -2061,6 +2151,7 @@ func (m *model) syncUIState() {
 	m.ui.SortMode = m.sortMode
 	m.ui.OldMode = m.oldMode
 	m.ui.RenameMode = m.renameMode
+	m.ui.SearchFirstMode = m.searchFirstMode
 	
 	// Update inputs
 	m.ui.Search = m.search
@@ -2147,6 +2238,354 @@ func (m model) renderPreviewPopover() string {
 	
 	popover := popoverStyle.Render(popoverContent)
 	return centerStyle.Render(popover)
+}
+
+// handleSearchFirstModeKey handles input when in search-first mode
+func (m model) handleSearchFirstModeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	
+	key := msg.String()
+	
+	// Handle ESC key - exit modal states or clear search
+	if key == "esc" {
+		// Reset waiting for second g state
+		m.waitingForSecondG = false
+		
+		// If we're in a modal state, exit that first
+		if m.createMode || m.tagMode || m.tagCreateMode || m.deleteMode || m.taskCreateMode || m.sortMode || m.oldMode || m.renameMode {
+			return m.handleModalEscape()
+		}
+		
+		// If we have search text, clear it
+		if m.search.Value() != "" {
+			m.search.SetValue("")
+			m.filtered = m.files
+			m.cursor = 0
+		}
+		return m, nil
+	}
+	
+	// Handle Ctrl chord shortcuts (available in both search and nav modes)
+	switch key {
+	case "ctrl+c", "ctrl+q":
+		return m, tea.Quit
+		
+	case "ctrl+n":
+		if !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			m.createMode = true
+			m.createInput.Focus()
+			return m, nil
+		}
+		
+	case "ctrl+d":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			// First, check if a daily note already exists for today
+			if existingDaily, err := findTodaysDailyNote(m.cwd); err == nil {
+				// Daily note exists, open it
+				m.selected = existingDaily
+				// Find and select the file in the list
+				for i, f := range m.filtered {
+					if f == existingDaily {
+						m.cursor = i
+						break
+					}
+				}
+				return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+					return clearSelectedMsg{}
+				})
+			} else {
+				// No daily note exists, create one
+				filename, identifier := getDailyNoteFilename(m.config)
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Create the daily note with proper formatting
+				today := time.Now().Format("Monday, January 2, 2006")
+				title := fmt.Sprintf("Daily Note - %s", today)
+				
+				var tags []string
+				if m.config.DenoteFilenames {
+					tags = []string{"daily"}
+				}
+				content := generateNoteContent(title, m.config, identifier, tags)
+				content += "## Tasks\n\n## Notes\n\n"
+				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+					m.selected = fullPath
+					// Refresh file list to include new file
+					files, _ := findMarkdownFiles(m.cwd)
+					m.files = m.applySorting(files)
+					m.filtered = m.files
+					// Find and select the new file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				}
+			}
+		}
+		
+	case "ctrl+e":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+			m.selected = m.filtered[m.cursor]
+			return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+				return clearSelectedMsg{}
+			})
+		}
+		
+	case "ctrl+t":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			if taskFiles, err := searchTasks(m.cwd); err == nil {
+				m.filtered = taskFiles
+				m.taskFilter = true
+				m.cursor = 0
+				// Clear other filters
+				m.tagFilter = false
+				m.textFilter = false
+				m.dailyFilter = false
+				m.oldFilter = false
+				cmds = append(cmds, ui.ShowSuccess("Showing files with tasks"))
+			}
+		}
+		
+	case "ctrl+3", "ctrl+shift+3":
+		if !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			m.tagMode = true
+			m.tagInput.Focus()
+		}
+		
+	case "ctrl+o":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			m.sortMode = true
+		}
+		
+	case "ctrl+shift+o":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			m.oldMode = true
+			m.oldInput.Focus()
+		}
+		
+	case "ctrl+r":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+			m.renameMode = true
+			m.renameFile = m.filtered[m.cursor]
+			
+			// Perform the rename immediately
+			if newPath, err := renameToDenoteName(m.renameFile, m.config); err == nil {
+				// Refresh file list after successful rename
+				files, _ := findMarkdownFiles(m.cwd)
+				m.files = m.applySorting(files)
+				m.filtered = m.files
+				
+				// Try to maintain cursor position on the renamed file
+				for i, f := range m.filtered {
+					if f == newPath {
+						m.cursor = i
+						break
+					}
+				}
+				
+				// Show success message and exit rename mode
+				m.renameMode = false
+				m.renameFile = ""
+				cmds = append(cmds, ui.ShowSuccess("File renamed to Denote format"))
+			} else {
+				// Show error and exit rename mode
+				m.renameMode = false
+				m.renameFile = ""
+				cmds = append(cmds, ui.ShowError(fmt.Sprintf("Failed to rename: %v", err)))
+			}
+		}
+		
+	case "ctrl+x":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+			m.deleteMode = true
+			m.deleteFile = m.filtered[m.cursor]
+		}
+		
+	case "ctrl+k":
+		if m.config.TaskwarriorSupport && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+			currentFile := m.filtered[m.cursor]
+			filename := filepath.Base(currentFile)
+			if len(filename) > 16 && filename[8] == 'T' && (filename[15] == '-' || filename[15] == '_') {
+				m.taskCreateMode = true
+				m.taskCreateInput.Focus()
+			}
+		}
+		
+	case "ctrl+shift+d":
+		if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode {
+			if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
+				m.filtered = dailyFiles
+				m.dailyFilter = true
+				m.cursor = 0
+				// Clear other filters
+				m.tagFilter = false
+				m.textFilter = false
+				m.taskFilter = false
+				m.oldFilter = false
+				cmds = append(cmds, ui.ShowSuccess("Showing daily notes"))
+			}
+		}
+	}
+	
+	// Handle search input and navigation (simplified)
+	return m.handleSearchFirstKeys(msg, cmds)
+}
+
+// handleModalEscape handles ESC key when in a modal state
+func (m model) handleModalEscape() (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+	
+	if m.searchMode {
+		m.searchMode = false
+		m.search.SetValue("")
+		m.filtered = m.files
+		m.cursor = 0
+	}
+	if m.createMode {
+		m.createMode = false
+		m.createInput.SetValue("")
+	}
+	if m.tagCreateMode {
+		// Exit tag create mode and create note without tags
+		title := m.pendingTitle
+		var filename string
+		var identifier string
+		if m.config.DenoteFilenames {
+			filename, identifier = generateDenoteName(title, []string{}, time.Now())
+		} else {
+			filename = titleToFilename(title)
+			identifier = ""
+		}
+		fullPath := filepath.Join(m.cwd, filename)
+		
+		// Create the file without tags
+		content := generateNoteContent(title, m.config, identifier, nil)
+		if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+			m.selected = fullPath
+			// Refresh file list to include new file
+			files, _ := findMarkdownFiles(m.cwd)
+			m.files = m.applySorting(files)
+			m.filtered = m.files
+			// Find and select the new file
+			for i, f := range m.filtered {
+				if f == fullPath {
+					m.cursor = i
+					break
+				}
+			}
+			// Exit tag create mode and open editor
+			m.tagCreateMode = false
+			m.tagCreateInput.SetValue("")
+			m.pendingTitle = ""
+			return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+				return clearSelectedMsg{}
+			})
+		}
+		// If file creation failed, still exit the mode
+		m.tagCreateMode = false
+		m.tagCreateInput.SetValue("")
+		m.pendingTitle = ""
+	}
+	if m.tagMode {
+		m.tagMode = false
+		m.tagInput.SetValue("")
+		m.filtered = m.files
+		m.cursor = 0
+	}
+	if m.deleteMode {
+		m.deleteMode = false
+		m.deleteFile = ""
+	}
+	if m.sortMode {
+		m.sortMode = false
+	}
+	if m.oldMode {
+		m.oldMode = false
+		m.oldInput.SetValue("")
+	}
+	if m.taskCreateMode {
+		m.taskCreateMode = false
+		m.taskCreateInput.SetValue("")
+	}
+	if m.renameMode {
+		m.renameMode = false
+		m.renameFile = ""
+	}
+	
+	// Clear all filters
+	if m.taskFilter || m.tagFilter || m.textFilter || m.dailyFilter || m.oldFilter {
+		m.taskFilter = false
+		m.tagFilter = false
+		m.textFilter = false
+		m.dailyFilter = false
+		m.oldFilter = false
+		m.filtered = m.files
+		m.cursor = 0
+	}
+	
+	return m, tea.Batch(cmds...)
+}
+
+// handleSearchFirstKeys handles all input in search-first mode (simplified)
+func (m model) handleSearchFirstKeys(msg tea.KeyMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	
+	// Handle navigation keys that work alongside search (only arrow keys, not j/k)
+	switch key {
+	case "enter":
+		if m.cursor < len(m.filtered) {
+			selectedFile := m.filtered[m.cursor]
+			// Use external preview command if configured, otherwise internal preview
+			if m.config.PreviewCommand != "" {
+				m.selected = selectedFile
+				return m, tea.ExecProcess(m.openInPreview(), func(err error) tea.Msg {
+					return clearSelectedMsg{}
+				})
+			} else {
+				// Internal preview popover
+				m.previewFile = selectedFile
+				m.previewMode = true
+				m.previewScroll = 0
+				return m, m.loadPreviewForPopover()
+			}
+		}
+		
+	case "up":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+		return m, tea.Batch(cmds...)
+		
+	case "down":
+		if m.cursor < len(m.filtered)-1 {
+			m.cursor++
+		}
+		return m, tea.Batch(cmds...)
+	}
+	
+	// Handle search input - typing filters the list (including j, k, g, G)
+	var cmd tea.Cmd
+	if len(key) == 1 || key == "backspace" || key == "delete" || key == "space" {
+		// All single character keys go to search input
+		m.search, cmd = m.search.Update(msg)
+		query := m.search.Value()
+		m.filtered = filterFiles(m.files, query)
+		m.cursor = 0 // Reset cursor when filtering
+		// Clear other filters when doing a text search
+		m.taskFilter = false
+		m.tagFilter = false
+		m.textFilter = false
+		m.dailyFilter = false
+		m.oldFilter = false
+		cmds = append(cmds, cmd)
+	}
+	
+	return m, tea.Batch(cmds...)
 }
 
 func main() {

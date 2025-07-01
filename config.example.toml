@@ -70,8 +70,18 @@ taskwarrior_support = false
 # "minimal" - Monochrome with minimal color usage
 theme = "default"
 
+# Search-first mode (optional)
+# If true, typing immediately filters notes, all actions use Ctrl chords
+# (Ctrl+N for new note, Ctrl+E for edit, etc.), ESC clears search
+# If false, uses classic vim-like mode with single-key shortcuts
+# Default: true (search-first mode for new users)
+search_first_mode = true
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim
 # preview_command = "bat --style=plain --color=always"  # bat with color
 # preview_command = "mdcat"           # mdcat viewer
+
+# For classic vim-like single-key shortcuts (existing users):
+# search_first_mode = false
