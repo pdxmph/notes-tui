@@ -229,7 +229,7 @@ func (m model) getTasksDirectory() string {
 	return m.cwd // Fall back to notes directory
 }
 
-func initialModel(config Config, startupTag string, startInTaskMode bool) model {
+func initialModel(config Config, startupTag string, startInTaskMode bool, startupArea string) model {
 	
 	// Use configured notes directory
 	cwd := config.NotesDirectory
@@ -374,6 +374,25 @@ func initialModel(config Config, startupTag string, startInTaskMode bool) model 
 				return filepath.Base(path)
 			}
 			m.ui.TaskModeActive = true
+			
+			// Apply area filter if specified
+			if startupArea != "" {
+				// Check if the area exists in tasks
+				areaExists := false
+				for _, task := range m.tasks {
+					if task.Area == startupArea {
+						areaExists = true
+						break
+					}
+				}
+				
+				if areaExists {
+					m.taskAreaContext = startupArea
+					m.refreshTaskView()
+					// Update UI components with area context
+					m.ui.TaskAreaContext = startupArea
+				}
+			}
 		}
 	}
 
@@ -3574,10 +3593,18 @@ func main() {
 	var tag = flag.String("tag", "", "Filter notes by tag (e.g., --tag=@mikeh)")
 	var openID = flag.String("open-id", "", "Open note with specific Denote identifier (e.g., --open-id=20241225T093015)")
 	var taskMode = flag.Bool("tasks", false, "Start in task mode (requires denote_tasks_support=true in config)")
+	var area = flag.String("area", "", "Filter tasks by area when starting in task mode (e.g., -tasks -area work)")
 	flag.Parse()
 
 	// Load config first
 	config := LoadConfig()
+	
+	// Validate area flag usage
+	if *area != "" && !*taskMode {
+		fmt.Fprintf(os.Stderr, "Error: -area flag requires -tasks flag\n")
+		flag.Usage()
+		os.Exit(1)
+	}
 	
 	// Handle directory argument (remaining args after flags)
 	args := flag.Args()
@@ -3688,7 +3715,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	p := tea.NewProgram(initialModel(config, *tag, *taskMode), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(config, *tag, *taskMode, *area), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		log.Fatal(err)

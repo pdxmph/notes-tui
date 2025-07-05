@@ -34,6 +34,12 @@ notes-tui
 
 # Use specific directory
 notes-tui /path/to/notes
+
+# Start in task mode (requires denote_tasks_support = true)
+notes-tui -tasks
+
+# Start in task mode with area filter
+notes-tui -tasks -area work
 ```
 
 ## Configuration
