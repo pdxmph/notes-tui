@@ -49,6 +49,10 @@ type ViewState struct {
 	TaskFormatter  func(string) string
 	TaskAreaContext string
 	TaskStatusFilter string
+	
+	// Projects mode
+	Projects       []interface{} // Project items for display
+	ProjectsCursor int
 }
 
 // ViewMode represents the current interaction mode
@@ -67,6 +71,7 @@ const (
 	ModePreview
 	ModeLoading
 	ModeTaskFilter
+	ModeProjects
 )
 
 // ViewComposer handles view composition
@@ -159,6 +164,8 @@ func (v *ViewComposer) renderContent() string {
 		return v.renderDeleteMode()
 	case ModeTaskFilter:
 		return v.renderTaskFilterMode()
+	case ModeProjects:
+		return v.renderProjectsMode()
 	default:
 		return v.renderFileList()
 	}
@@ -495,6 +502,7 @@ func (v *ViewComposer) renderHelpBar() string {
 			{Key: "u", Desc: "[u]pdate metadata"},
 			{Key: "d", Desc: "[d]one"},
 			{Key: "p", Desc: "[p]ause/unpause"},
+			{Key: "P", Desc: "[P]rojects"},
 			{Key: "1/2/3", Desc: "set priority"},
 			{Key: "X", Desc: "delete"},
 			{Key: "q", Desc: "[q]uit"},
@@ -552,6 +560,46 @@ func (v *ViewComposer) renderHelpBar() string {
 	
 	// Join the two lines
 	return help1.View() + "\n" + help2.View()
+}
+
+// renderProjectsMode renders the projects list view
+func (v *ViewComposer) renderProjectsMode() string {
+	contentWidth, _ := v.state.Layout.ContentArea()
+	availableHeight := v.calculateAvailableHeight()
+	
+	// Convert projects to ProjectItems
+	projectItems := make([]ProjectItem, 0, len(v.state.Projects))
+	for _, p := range v.state.Projects {
+		if project, ok := p.(*ProjectItem); ok {
+			projectItems = append(projectItems, *project)
+		}
+	}
+	
+	// Create project list view
+	projectList := ProjectListView{
+		Items:        projectItems,
+		Cursor:       v.state.ProjectsCursor,
+		Width:        contentWidth,
+		Height:       availableHeight - 2, // Reserve space for help
+		ShowCursor:   true,
+		EmptyMessage: "No projects found.",
+		Theme:        DefaultProjectTheme(),
+	}
+	
+	content := projectList.View()
+	
+	// Add help bar
+	help := HelpBar{
+		Items: []HelpItem{
+			{Key: "Esc", Desc: "back to tasks"},
+			{Key: "Enter", Desc: "view project tasks"},
+			{Key: "q", Desc: "quit"},
+		},
+		Width: contentWidth,
+		Style: v.state.Theme.Help,
+	}
+	
+	return content + "\n" + help.View()
 }
 
 // Helper methods

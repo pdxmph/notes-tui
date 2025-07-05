@@ -198,6 +198,7 @@ type model struct {
 	taskFilterMode  bool            // are we in task filter selection mode?
 	taskFilterType  string          // current task filter: "all", "open", "projects", etc.
 	taskFilterProject string        // specific project to filter by
+	projectsMode    bool            // are we in projects list mode?
 	// Area context - persists across other filters
 	taskAreaContext string          // current area context (empty means all areas)
 	taskStatusFilter string         // status filter applied within area context
@@ -1668,6 +1669,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Exit area select mode
 				m.areaSelectMode = false
 				m.availableAreas = nil
+			}
+			if m.projectsMode {
+				// Exit projects mode back to task list
+				m.projectsMode = false
+				m.ui.ProjectsMode = false
+				// Restore task view
+				m.refreshTaskView()
 				m.areaSelectCursor = 0
 			}
 			var filterCleared bool
@@ -1824,6 +1832,47 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmd := m.toggleTaskMode()
 					return m, cmd
 				}
+			}
+
+		case "P":
+			if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && !m.taskFilterMode && !m.projectsMode {
+				// Enter projects mode
+				m.projectsMode = true
+				m.ui.ProjectsMode = true
+				
+				// Load projects if not already loaded
+				if m.projects == nil {
+					scanner := denote.NewScanner(m.getTasksDirectory())
+					projects, err := scanner.FindProjects()
+					if err != nil || len(projects) == 0 {
+						m.projectsMode = false
+						m.ui.ProjectsMode = false
+						return m, ui.ShowError("No projects found")
+					}
+					m.projects = projects
+				}
+				
+				// Convert projects to display items with task counts
+				projectItems := m.prepareProjectItems()
+				
+				// Update UI state
+				m.ui.Projects = make([]interface{}, len(projectItems))
+				for i, item := range projectItems {
+					itemCopy := item // Important: create a copy
+					m.ui.Projects[i] = &itemCopy
+				}
+				m.ui.ProjectsCursor = 0
+				
+				// Update file lists for navigation
+				m.files = make([]string, len(m.projects))
+				m.filtered = make([]string, len(m.projects))
+				for i, project := range m.projects {
+					m.files[i] = project.Path
+					m.filtered[i] = project.Path
+				}
+				m.cursor = 0
+				
+				return m, nil
 			}
 
 		case "d":
@@ -2174,21 +2223,38 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "P":
-			if m.taskFilterMode {
-				// Show projects only
-				m.showProjectsOnly()
-				m.taskFilterMode = false
-			} else if m.taskModeActive && m.taskFilterType == "projects" {
-				// Debug: show current state
-				return m, ui.ShowInfo(fmt.Sprintf("Projects: %d, FilterType: %s", len(m.projects), m.taskFilterType))
-			}
 
 
 		case "backspace":
 			if m.taskModeActive {
-				// Handle different contexts
-				if m.taskAreaContext != "" && m.taskStatusFilter != "" {
+				// Handle different contexts - check project filter first
+				if m.taskFilterType == "project" && m.taskFilterProject != "" {
+					// Was viewing project tasks, go back to projects mode
+					m.projectsMode = true
+					m.ui.ProjectsMode = true
+					
+					// Restore projects display
+					projectItems := m.prepareProjectItems()
+					m.ui.Projects = make([]interface{}, len(projectItems))
+					for i, item := range projectItems {
+						itemCopy := item
+						m.ui.Projects[i] = &itemCopy
+					}
+					
+					// Update file lists
+					m.files = make([]string, len(m.projects))
+					m.filtered = make([]string, len(m.projects))
+					for i, project := range m.projects {
+						m.files[i] = project.Path
+						m.filtered[i] = project.Path
+					}
+					
+					// Clear project filter
+					m.taskFilterType = ""
+					m.taskFilterProject = ""
+					
+					return m, ui.ShowInfo("Back to projects")
+				} else if m.taskAreaContext != "" && m.taskStatusFilter != "" {
 					// Clear status filter but keep area context
 					m.taskStatusFilter = ""
 					m.taskFilterType = "all"
@@ -2199,10 +2265,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.taskAreaContext = ""
 					m.refreshTaskView()
 					return m, ui.ShowInfo("Area filter cleared")
-				} else if m.taskFilterType == "project" && m.taskFilterProject != "" {
-					// Was viewing project tasks, go back to projects
-					m.showProjectsOnly()
-					return m, ui.ShowInfo("Back to projects")
 				} else if m.taskFilterType == "projects" {
 					// Was viewing projects, go back to all tasks
 					// Need to reload tasks since they were set to nil
@@ -2283,6 +2345,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.applyTaskFilter("area", selectedArea)
 					return m, ui.ShowSuccess(fmt.Sprintf("Filtering by area: %s", selectedArea))
 				}
+			} else if m.projectsMode && m.cursor < len(m.projects) {
+				// View tasks for selected project
+				project := m.projects[m.cursor]
+				projectKey := project.ProjectMetadata.Identifier
+				if projectKey == "" {
+					projectKey = project.ProjectMetadata.Title
+				}
+				
+				// Exit projects mode and show project tasks
+				m.projectsMode = false
+				m.ui.ProjectsMode = false
+				m.applyTaskFilter("project", projectKey)
+				return m, ui.ShowSuccess(fmt.Sprintf("Showing tasks for project: %s", project.ProjectMetadata.Title))
 			} else if m.tagMode {
 				// Search for the tag
 				tag := m.tagInput.Value()
@@ -3586,6 +3661,72 @@ func (m *model) showProjectTasks(projectName string) tea.Cmd {
 		
 		return ui.ShowError(fmt.Sprintf("No tasks for '%s'. Available projects: %v", projectName, availableProjects))
 	}
+}
+
+// prepareProjectItems converts projects to display items with task counts
+func (m *model) prepareProjectItems() []ui.ProjectItem {
+	items := make([]ui.ProjectItem, 0, len(m.projects))
+	
+	// Count tasks per project
+	taskCounts := m.countTasksPerProject()
+	
+	for _, project := range m.projects {
+		projectKey := project.ProjectMetadata.Identifier
+		if projectKey == "" {
+			projectKey = project.ProjectMetadata.Title
+		}
+		
+		openCount := 0
+		doneCount := 0
+		if counts, ok := taskCounts[projectKey]; ok {
+			openCount = counts.open
+			doneCount = counts.done
+		}
+		
+		item := ui.ProjectItem{
+			Project:   project,
+			Title:     project.ProjectMetadata.Title,
+			Status:    project.ProjectMetadata.Status,
+			Priority:  project.GetPriorityInt(),
+			StartDate: project.GetParsedStartDate(),
+			DueDate:   project.GetParsedDueDate(),
+			OpenTasks: openCount,
+			DoneTasks: doneCount,
+		}
+		items = append(items, item)
+	}
+	
+	return items
+}
+
+// countTasksPerProject counts open and done tasks for each project
+func (m *model) countTasksPerProject() map[string]struct{ open, done int } {
+	counts := make(map[string]struct{ open, done int })
+	
+	// Ensure tasks are loaded
+	if m.tasks == nil {
+		scanner := denote.NewScanner(m.getTasksDirectory())
+		tasks, err := scanner.FindTasks()
+		if err == nil {
+			m.tasks = tasks
+		}
+	}
+	
+	// Count tasks by project
+	for _, task := range m.tasks {
+		if task.Project != "" {
+			c := counts[task.Project]
+			switch task.Status {
+			case denote.TaskStatusDone:
+				c.done++
+			case denote.TaskStatusOpen, denote.TaskStatusPaused:
+				c.open++
+			}
+			counts[task.Project] = c
+		}
+	}
+	
+	return counts
 }
 
 func main() {

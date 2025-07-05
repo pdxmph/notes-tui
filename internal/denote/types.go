@@ -144,3 +144,41 @@ func formatDate(t time.Time) string {
 func getCurrentTime() time.Time {
 	return time.Now()
 }
+
+// GetParsedStartDate returns the parsed start date for a project
+func (p *Project) GetParsedStartDate() *time.Time {
+	if p.StartDate == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", p.StartDate)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// GetParsedDueDate returns the parsed due date for a project
+func (p *Project) GetParsedDueDate() *time.Time {
+	if p.DueDate == "" {
+		return nil
+	}
+	t, err := time.Parse("2006-01-02", p.DueDate)
+	if err != nil {
+		return nil
+	}
+	return &t
+}
+
+// GetPriorityInt returns the priority as an integer (1=high, 2=med, 3=low)
+func (p *Project) GetPriorityInt() int {
+	switch p.Priority {
+	case "p1", "1":
+		return 1
+	case "p2", "2":
+		return 2
+	case "p3", "3":
+		return 3
+	default:
+		return 0
+	}
+}

@@ -32,6 +32,7 @@ type ModelIntegration struct {
 	OldMode         bool
 	RenameMode      bool
 	TaskFilterMode  bool
+	ProjectsMode    bool
 
 	// Mode-specific data
 	Search          textinput.Model
@@ -76,6 +77,10 @@ type ModelIntegration struct {
 	TaskFormatter      func(string) string // Function to format task lines
 	TaskAreaContext    string              // Current area context (empty = all areas)
 	TaskStatusFilter   string              // Current status filter within area
+	
+	// Projects mode
+	Projects       []interface{} // Project items
+	ProjectsCursor int
 
 	// UI Components
 	theme    Theme
@@ -232,6 +237,9 @@ func (m *ModelIntegration) createViewState() ViewState {
 		TaskFormatter:      m.TaskFormatter,
 		TaskAreaContext:    m.TaskAreaContext,
 		TaskStatusFilter:   m.TaskStatusFilter,
+		
+		Projects:       m.Projects,
+		ProjectsCursor: m.Cursor,
 	}
 }
 
@@ -266,6 +274,9 @@ func (m *ModelIntegration) getCurrentMode() ViewMode {
 	}
 	if m.TaskFilterMode {
 		return ModeTaskFilter
+	}
+	if m.ProjectsMode {
+		return ModeProjects
 	}
 	if m.SortMode {
 		return ModeSort
