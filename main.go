@@ -46,6 +46,8 @@ func DefaultConfig() Config {
 	if _, err := os.Stat(notesDir); os.IsNotExist(err) {
 		cwd, err := os.Getwd()
 		if err != nil {
+			// if couldn't get work dir 
+			// trying create default in ~/notes/
 			err := os.MkdirAll(notesDir, 0755)
 			if  err != nil {
 				fmt.Printf("Error finding notes directory: %v\n", err)
