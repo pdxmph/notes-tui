@@ -5,6 +5,11 @@
 # If not set, uses current directory or ~/notes if it exists
 notes_directory = "/Users/mph/notes"
 
+# Directory for task files (optional)
+# If not set, tasks are stored in notes_directory
+# Use this to separate tasks from regular notes if desired
+# tasks_directory = "/Users/mph/notes/tasks"
+
 # Editor command with arguments
 # Supports commands with spaces and arguments
 # If not set, falls back to $EDITOR environment variable
@@ -60,6 +65,12 @@ show_titles = false
 # Requires TaskWarrior to be installed and notesid UDA configured
 # See TASKWARRIOR.md for setup instructions
 taskwarrior_support = false
+
+# Enable Denote-style task management (optional)
+# If true, enables 'T' key to toggle task mode for managing __task__ files
+# Task mode includes creating, filtering, and updating task metadata
+# This is an experimental feature that requires testing
+denote_tasks_support = false
 
 # Theme selection (optional)
 # Available themes: "default", "dark", "light", "high-contrast", "minimal"

@@ -20,11 +20,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/BurntSushi/toml"
 	"github.com/pdxmph/notes-tui/internal/ui"
+	"github.com/pdxmph/notes-tui/internal/denote"
 )
 
 // Config holds application configuration
 type Config struct {
 	NotesDirectory     string `toml:"notes_directory"`
+	TasksDirectory     string `toml:"tasks_directory"`
 	Editor             string `toml:"editor"`
 	PreviewCommand     string `toml:"preview_command"`
 	AddFrontmatter     bool   `toml:"add_frontmatter"`
@@ -34,6 +36,7 @@ type Config struct {
 	ShowTitles         bool   `toml:"show_titles"`
 	PromptForTags      bool   `toml:"prompt_for_tags"`
 	TaskwarriorSupport bool   `toml:"taskwarrior_support"`
+	DenoteTasksSupport bool   `toml:"denote_tasks_support"`
 	Theme              string `toml:"theme"`
 }
 
@@ -50,11 +53,13 @@ func DefaultConfig() Config {
 	
 	return Config{
 		NotesDirectory:     notesDir,
+		TasksDirectory:     "", // Will default to NotesDirectory if empty
 		Editor:             "", // Will fall back to $EDITOR
 		PreviewCommand:     "", // Will use internal preview
 		AddFrontmatter:     false, // Default to simple markdown headers
 		InitialReverseSort: false, // Default to normal sort order
 		TaskwarriorSupport: false, // Default to disabled
+		DenoteTasksSupport: false, // Default to disabled
 		Theme:              "default", // Default theme
 	}
 }
@@ -185,6 +190,26 @@ type model struct {
 	waitingForSecondG bool          // waiting for second 'g' in 'gg' sequence
 	// UI integration
 	ui              *ui.ModelIntegration
+	// Task mode state
+	taskModeActive  bool            // are we in task management mode?
+	tasks           []*denote.Task  // loaded tasks when in task mode
+	projects        []*denote.Project // loaded projects when showing projects
+	taskSortBy      string          // task-specific sort: "priority", "due", "status", "id"
+	taskFilterMode  bool            // are we in task filter selection mode?
+	taskFilterType  string          // current task filter: "all", "open", "projects", etc.
+	taskFilterProject string        // specific project to filter by
+	// Area context - persists across other filters
+	taskAreaContext string          // current area context (empty means all areas)
+	taskStatusFilter string         // status filter applied within area context
+	// Area selection mode
+	areaSelectMode  bool            // are we in area selection mode?
+	availableAreas  []string        // list of available areas
+	areaSelectCursor int            // cursor position in area list
+	// Task edit mode
+	taskEditMode    bool            // are we editing task metadata?
+	taskEditField   string          // which field is being edited: "due", "start", "estimate", "priority", "project", "area"
+	taskEditInput   textinput.Model // input for current field
+	taskBeingEdited *denote.Task    // pointer to task being edited
 }
 
 // Message for preview content
@@ -196,10 +221,15 @@ type previewLoadedMsg struct {
 // Message to clear selected file state
 type clearSelectedMsg struct{}
 
+// getTasksDirectory returns the effective tasks directory
+func (m model) getTasksDirectory() string {
+	if m.config.TasksDirectory != "" {
+		return m.config.TasksDirectory
+	}
+	return m.cwd // Fall back to notes directory
+}
 
-func initialModel(startupTag string) model {
-	// Load configuration
-	config := LoadConfig()
+func initialModel(config Config, startupTag string, startInTaskMode bool) model {
 	
 	// Use configured notes directory
 	cwd := config.NotesDirectory
@@ -252,6 +282,11 @@ func initialModel(startupTag string) model {
 	taski.Placeholder = "Task description..."
 	taski.CharLimit = 200
 	taski.Width = 50
+	
+	// Create task edit input
+	taskEditi := textinput.New()
+	taskEditi.CharLimit = 100
+	taskEditi.Width = 40
 
 	m := model{
 		files:          files,
@@ -262,6 +297,7 @@ func initialModel(startupTag string) model {
 		tagCreateInput: tagci,
 		oldInput:       oldi,
 		taskCreateInput: taski,
+		taskEditInput:  taskEditi,
 		cwd:            cwd,
 		config:         config,
 		reversedSort:   config.InitialReverseSort,
@@ -295,6 +331,7 @@ func initialModel(startupTag string) model {
 		ShowTitles:         config.ShowTitles,
 		DenoteFilenames:    config.DenoteFilenames,
 		TaskwarriorSupport: config.TaskwarriorSupport,
+		DenoteTasksSupport: config.DenoteTasksSupport,
 		ThemeName:          config.Theme,
 		Search:             m.search,
 		CreateInput:        m.createInput,
@@ -302,6 +339,42 @@ func initialModel(startupTag string) model {
 		TagCreateInput:     m.tagCreateInput,
 		TaskCreateInput:    m.taskCreateInput,
 		OldInput:           m.oldInput,
+	}
+
+	// Initialize UI
+	m.ui.Initialize()
+
+	// Start in task mode if requested AND if task support is enabled
+	if startInTaskMode && config.DenoteTasksSupport {
+		// Load tasks directly
+		scanner := denote.NewScanner(m.getTasksDirectory())
+		tasks, err := scanner.FindTasks()
+		
+		if err == nil && len(tasks) > 0 {
+			m.taskModeActive = true
+			m.tasks = tasks
+			m.taskSortBy = "priority"
+			denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+			
+			// Update file lists
+			m.files = make([]string, len(m.tasks))
+			m.filtered = make([]string, len(m.tasks))
+			for i, task := range m.tasks {
+				m.files[i] = task.Path
+				m.filtered[i] = task.Path
+			}
+			m.cursor = 0
+			
+			// Set task formatter
+			m.ui.TaskFormatter = func(path string) string {
+				task := m.findTaskByPath(path)
+				if task != nil {
+					return m.formatTaskLine(task)
+				}
+				return filepath.Base(path)
+			}
+			m.ui.TaskModeActive = true
+		}
 	}
 
 	return m
@@ -475,14 +548,9 @@ func parseDenoteFilename(filename string) (title string, timestamp time.Time) {
 		// Try to parse timestamp
 		t, err := time.Parse("20060102T150405", timestampStr)
 		if err == nil {
-			// Convert hyphens back to spaces and capitalize
-			words := strings.Split(titlePart, "-")
-			for i, word := range words {
-				if len(word) > 0 {
-					words[i] = strings.ToUpper(string(word[0])) + word[1:]
-				}
-			}
-			return strings.Join(words, " "), t
+			// Convert hyphens back to spaces (no capitalization)
+			title := strings.ReplaceAll(titlePart, "-", " ")
+			return title, t
 		}
 	}
 	
@@ -781,6 +849,38 @@ func generateNoteContent(title string, config Config, identifier string, tags []
 		// Simple markdown header format
 		return fmt.Sprintf("# %s\n\n", title)
 	}
+}
+
+// generateTaskContent generates content for a new task file
+func generateTaskContent(title string, config Config, identifier string, taskID int) string {
+	today := time.Now().Format("2006-01-02")
+	
+	// Always use frontmatter for tasks
+	frontmatter := "---\n"
+	frontmatter += fmt.Sprintf("title: %s\n", title)
+	frontmatter += fmt.Sprintf("date: %s\n", today)
+	
+	// Add identifier if using Denote style
+	if config.DenoteFilenames && identifier != "" {
+		frontmatter += fmt.Sprintf("identifier: %s\n", identifier)
+	}
+	
+	// Task-specific fields
+	frontmatter += "tags: [task]\n"
+	frontmatter += "status: open\n"
+	frontmatter += "priority: p2\n"
+	
+	// Use the provided sequential task ID
+	frontmatter += fmt.Sprintf("task_id: %d\n", taskID)
+	
+	frontmatter += "---\n\n"
+	frontmatter += fmt.Sprintf("# %s\n\n", title)
+	frontmatter += "## Description\n\n"
+	frontmatter += "## Tasks\n\n"
+	frontmatter += "- [ ] \n\n"
+	frontmatter += "## Notes\n\n"
+	
+	return frontmatter
 }
 
 // Get today's daily note filename
@@ -1138,39 +1238,68 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		previousFile := m.selected
 		m.selected = ""
 		
-		// Refresh file list after returning from editor
-		files, err := findMarkdownFiles(m.cwd)
-		if err != nil {
-			return m, nil
-		}
-		
-		// Apply current sort
-		m.files = m.applySorting(files)
-		
-		// Reapply any active filters
-		if m.taskFilter {
-			if taskFiles, err := searchTasks(m.cwd); err == nil {
-				m.filtered = taskFiles
+		// Refresh based on current mode
+		if m.taskModeActive {
+			// Reload tasks
+			scanner := denote.NewScanner(m.getTasksDirectory())
+			tasks, err := scanner.FindTasks()
+			if err != nil {
+				return m, nil
 			}
-		} else if m.tagFilter && m.tagInput.Value() != "" {
-			if tagFiles, err := searchTag(m.cwd, m.tagInput.Value()); err == nil {
-				m.filtered = tagFiles
+			
+			m.tasks = tasks
+			
+			// Apply current task sorting
+			if m.taskSortBy != "" {
+				denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
 			}
-		} else if m.textFilter && m.search.Value() != "" {
-			m.filtered = filterFiles(m.files, m.search.Value())
-		} else if m.dailyFilter {
-			if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
-				m.filtered = dailyFiles
+			
+			// Refresh the task view to apply any filters
+			m.refreshTaskView()
+			
+			// Ensure task formatter is set
+			m.ui.TaskFormatter = func(path string) string {
+				task := m.findTaskByPath(path)
+				if task != nil {
+					return m.formatTaskLine(task)
+				}
+				return filepath.Base(path)
 			}
-		} else if m.oldFilter {
-			m.filtered = filterFilesByDaysOld(m.files, m.oldDays)
 		} else {
-			// No filter active, use all files
-			m.filtered = m.files
+			// Normal mode - refresh markdown files
+			files, err := findMarkdownFiles(m.cwd)
+			if err != nil {
+				return m, nil
+			}
+			
+			// Apply current sort
+			m.files = m.applySorting(files)
+			
+			// Reapply any active filters
+			if m.taskFilter {
+				if taskFiles, err := searchTasks(m.cwd); err == nil {
+					m.filtered = taskFiles
+				}
+			} else if m.tagFilter && m.tagInput.Value() != "" {
+				if tagFiles, err := searchTag(m.cwd, m.tagInput.Value()); err == nil {
+					m.filtered = tagFiles
+				}
+			} else if m.textFilter && m.search.Value() != "" {
+				m.filtered = filterFiles(m.files, m.search.Value())
+			} else if m.dailyFilter {
+				if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
+					m.filtered = dailyFiles
+				}
+			} else if m.oldFilter {
+				m.filtered = filterFilesByDaysOld(m.files, m.oldDays)
+			} else {
+				// No filter active, use all files
+				m.filtered = m.files
+			}
+			
+			// Apply sorting to filtered list
+			m.filtered = m.applySorting(m.filtered)
 		}
-		
-		// Apply sorting to filtered list
-		m.filtered = m.applySorting(m.filtered)
 		
 		// Try to maintain cursor position on the edited file
 		if previousFile != "" {
@@ -1186,6 +1315,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor >= len(m.filtered) && len(m.filtered) > 0 {
 			m.cursor = len(m.filtered) - 1
 		}
+		
+		// Sync UI state
+		m.syncUIState()
 		
 		return m, nil
 
@@ -1248,6 +1380,108 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, nil
+		}
+		
+		// Task edit mode handling
+		if m.taskEditMode {
+			switch msg.String() {
+			case "esc":
+				// Cancel task editing
+				m.taskEditMode = false
+				m.taskEditField = ""
+				m.taskEditInput.SetValue("")
+				m.taskEditInput.Blur()
+				m.taskBeingEdited = nil
+				return m, nil
+				
+			case "enter":
+				if m.taskEditField == "" {
+					// Field selection is handled below in individual key cases
+					return m, nil
+				} else {
+					// Process the field update
+					cmd := m.processTaskFieldUpdate()
+					return m, cmd
+				}
+				
+			case "d":
+				if m.taskEditField == "" {
+					m.taskEditField = "due"
+					m.taskEditInput.Placeholder = "YYYY-MM-DD or relative (today, tomorrow, 3d, 1w)"
+					if m.taskBeingEdited.DueDate != "" {
+						m.taskEditInput.SetValue(m.taskBeingEdited.DueDate)
+					}
+					return m, nil
+				}
+				
+			case "s":
+				if m.taskEditField == "" {
+					m.taskEditField = "start"
+					m.taskEditInput.Placeholder = "YYYY-MM-DD or relative (today, tomorrow, 3d, 1w)"
+					if m.taskBeingEdited.StartDate != "" {
+						m.taskEditInput.SetValue(m.taskBeingEdited.StartDate)
+					}
+					return m, nil
+				}
+				
+			case "e":
+				if m.taskEditField == "" {
+					m.taskEditField = "estimate"
+					m.taskEditInput.Placeholder = "1, 2, 3, 5, 8, or 13 (Fibonacci)"
+					if m.taskBeingEdited.Estimate > 0 {
+						m.taskEditInput.SetValue(fmt.Sprintf("%d", m.taskBeingEdited.Estimate))
+					}
+					return m, nil
+				}
+				
+			case "p":
+				if m.taskEditField == "" {
+					m.taskEditField = "priority"
+					m.taskEditInput.Placeholder = "1, 2, 3 or p1, p2, p3"
+					if m.taskBeingEdited.Priority != "" {
+						m.taskEditInput.SetValue(m.taskBeingEdited.Priority)
+					}
+					return m, nil
+				}
+				
+			case "P":
+				if m.taskEditField == "" {
+					m.taskEditField = "project"
+					m.taskEditInput.Placeholder = "Project name"
+					if m.taskBeingEdited.Project != "" {
+						m.taskEditInput.SetValue(m.taskBeingEdited.Project)
+					}
+					return m, nil
+				}
+				
+			case "a":
+				if m.taskEditField == "" {
+					m.taskEditField = "area"
+					m.taskEditInput.Placeholder = "Area (work, personal, etc.)"
+					if m.taskBeingEdited.Area != "" {
+						m.taskEditInput.SetValue(m.taskBeingEdited.Area)
+					}
+					return m, nil
+				}
+				
+			case "t":
+				if m.taskEditField == "" {
+					m.taskEditField = "tags"
+					m.taskEditInput.Placeholder = "Comma-separated tags (e.g., bug, urgent, frontend)"
+					// Convert tags array to comma-delimited string
+					if len(m.taskBeingEdited.Tags) > 0 {
+						m.taskEditInput.SetValue(strings.Join(m.taskBeingEdited.Tags, ", "))
+					}
+					return m, nil
+				}
+			}
+			
+			// If we have a field selected, update the input
+			if m.taskEditField != "" {
+				var cmd tea.Cmd
+				m.taskEditInput, cmd = m.taskEditInput.Update(msg)
+				return m, cmd
+			}
 		}
 
 		// Normal mode key handling
@@ -1407,6 +1641,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskCreateMode = false
 				m.taskCreateInput.SetValue("")
 			}
+			if m.taskFilterMode {
+				// Exit task filter mode
+				m.taskFilterMode = false
+			}
+			if m.areaSelectMode {
+				// Exit area select mode
+				m.areaSelectMode = false
+				m.availableAreas = nil
+				m.areaSelectCursor = 0
+			}
 			var filterCleared bool
 			if m.taskFilter {
 				// Clear task filter
@@ -1462,6 +1706,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Enter create mode
 				m.createMode = true
 				m.createInput.Focus()
+				// Set the prompt based on mode
+				if m.taskModeActive {
+					m.createInput.Placeholder = "Task title..."
+				} else {
+					m.createInput.Placeholder = "Note title..."
+				}
 				return m, nil
 			}
 
@@ -1511,11 +1761,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteFile = m.filtered[m.cursor]
 			}
 
-		case "o":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.oldMode && !m.taskCreateMode {
-				// Enter sort mode
-				m.sortMode = true
-			}
 
 		case "O":
 			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.taskCreateMode {
@@ -1552,14 +1797,43 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.renameFile = ""
 			}
 
+		case "T":
+			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
+				// Only allow task mode if enabled in config
+				if m.config.DenoteTasksSupport {
+					// Toggle task mode
+					cmd := m.toggleTaskMode()
+					return m, cmd
+				}
+			}
+
 		case "d":
 			if m.sortMode {
-				// Sort by date
-				m.currentSort = "date"
-				m.files = m.applySorting(m.files)
-				m.filtered = m.applySorting(m.filtered)
+				if m.taskModeActive {
+					// In task mode, sort by due date
+					m.taskSortBy = "due"
+					m.applyTaskSorting()
+				} else {
+					// Normal mode, sort by date
+					m.currentSort = "date"
+					m.files = m.applySorting(m.files)
+					m.filtered = m.applySorting(m.filtered)
+				}
 				m.sortMode = false
 				m.cursor = 0
+				return m, nil
+			} else if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+				// In task mode, 'd' marks task as done
+				if task := m.findTaskByPath(m.filtered[m.cursor]); task != nil {
+					if err := denote.UpdateTaskStatus(task.Path, denote.TaskStatusDone); err == nil {
+						// Update task in memory
+						task.Status = denote.TaskStatusDone
+						// Show success message
+						return m, ui.ShowSuccess("Task marked as done")
+					} else {
+						return m, ui.ShowError("Failed to update task status")
+					}
+				}
 			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
 				// First, check if a daily note already exists for today
 				if existingDaily, err := findTodaysDailyNote(m.cwd); err == nil {
@@ -1615,12 +1889,65 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "m":
 			if m.sortMode {
-				// Sort by modified
-				m.currentSort = "modified"
-				m.files = m.applySorting(m.files)
-				m.filtered = m.applySorting(m.filtered)
+				if m.taskModeActive {
+					// In task mode, 'm' sorts by modified
+					m.taskSortBy = "modified"
+					m.applyTaskSorting()
+				} else {
+					// Sort by modified
+					m.currentSort = "modified"
+					m.files = m.applySorting(m.files)
+					m.filtered = m.applySorting(m.filtered)
+				}
 				m.sortMode = false
 				m.cursor = 0
+				return m, nil
+			}
+
+		case "p":
+			if m.sortMode && m.taskModeActive {
+				// In task mode sort, 'p' sorts by priority
+				m.taskSortBy = "priority"
+				m.applyTaskSorting()
+				m.sortMode = false
+				m.cursor = 0
+				return m, nil
+			} else if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+				// In task mode, 'p' pauses/unpauses task
+				if task := m.findTaskByPath(m.filtered[m.cursor]); task != nil {
+					newStatus := denote.TaskStatusPaused
+					if task.Status == denote.TaskStatusPaused {
+						newStatus = denote.TaskStatusOpen
+					}
+					if err := denote.UpdateTaskStatus(task.Path, newStatus); err == nil {
+						task.Status = newStatus
+						return m, ui.ShowSuccess(fmt.Sprintf("Task %s", newStatus))
+					}
+				}
+			}
+
+		case "1", "2", "3":
+			if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && m.cursor < len(m.filtered) {
+				// In task mode, number keys set priority
+				if task := m.findTaskByPath(m.filtered[m.cursor]); task != nil {
+					priority := "p" + msg.String()
+					if err := denote.UpdateTaskPriority(task.Path, priority); err == nil {
+						task.Priority = priority
+						return m, ui.ShowSuccess(fmt.Sprintf("Priority set to %s", priority))
+					}
+				}
+			}
+
+		case "u":
+			if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode && !m.taskEditMode && m.cursor < len(m.filtered) {
+				// In task mode, 'u' starts task metadata editing
+				if task := m.findTaskByPath(m.filtered[m.cursor]); task != nil {
+					m.taskEditMode = true
+					m.taskBeingEdited = task
+					m.taskEditField = "" // No field selected yet
+					m.taskEditInput.SetValue("")
+					m.taskEditInput.Focus()
+				}
 			}
 
 		case "t":
@@ -1673,32 +2000,72 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor = 0
 			}
 
+		case "s":
+			if m.sortMode && m.taskModeActive {
+				// In task mode sort, 's' sorts by status
+				m.taskSortBy = "status"
+				m.applyTaskSorting()
+				m.sortMode = false
+				m.cursor = 0
+				return m, nil
+			}
+
 		case "y":
 			if m.deleteMode {
 				// Confirm deletion
 				deletedFile := filepath.Base(m.deleteFile)
 				if err := os.Remove(m.deleteFile); err == nil {
-					// Successfully deleted, refresh file list
-					files, _ := findMarkdownFiles(m.cwd)
-					m.files = m.applySorting(files)
-					
-					// If we had filters applied, reapply them
-					if m.taskFilter {
-						if taskFiles, err := searchTasks(m.cwd); err == nil {
-							m.filtered = m.applySorting(taskFiles)
-						} else {
-							m.filtered = m.files
+					// Successfully deleted, refresh appropriate list
+					if m.taskModeActive {
+						// Reload tasks through denote scanner
+						scanner := denote.NewScanner(m.getTasksDirectory())
+						if tasks, err := scanner.FindTasks(); err == nil {
+							m.tasks = tasks
+							// Apply current sorting
+							if m.taskSortBy != "" {
+								denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+							}
+							// Update file lists
+							m.files = make([]string, len(m.tasks))
+							m.filtered = make([]string, len(m.tasks))
+							for i, task := range m.tasks {
+								m.files[i] = task.Path
+								m.filtered[i] = task.Path
+							}
+							// Update task formatter
+							m.ui.TaskFormatter = func(path string) string {
+								task := m.findTaskByPath(path)
+								if task != nil {
+									return m.formatTaskLine(task)
+								}
+								return filepath.Base(path)
+							}
+							// Sync UI state
+							m.syncUIState()
 						}
-					} else if m.dailyFilter {
+					} else {
+						// Normal mode - refresh markdown files
+						files, _ := findMarkdownFiles(m.cwd)
+						m.files = m.applySorting(files)
+						
+						// If we had filters applied, reapply them
+						if m.taskFilter {
+							if taskFiles, err := searchTasks(m.cwd); err == nil {
+								m.filtered = m.applySorting(taskFiles)
+							} else {
+								m.filtered = m.files
+							}
+						} else if m.dailyFilter {
 						if dailyFiles, err := searchDailyNotes(m.cwd); err == nil {
 							m.filtered = m.applySorting(dailyFiles)
 						} else {
 							m.filtered = m.files
 						}
-					} else if m.search.Value() != "" {
-						m.filtered = m.applySorting(filterFiles(m.files, m.search.Value()))
-					} else {
-						m.filtered = m.files
+						} else if m.search.Value() != "" {
+							m.filtered = m.applySorting(filterFiles(m.files, m.search.Value()))
+						} else {
+							m.filtered = m.files
+						}
 					}
 					
 					// Adjust cursor position
@@ -1720,8 +2087,128 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.deleteFile = ""
 			}
 
+		case "f":
+			if m.taskModeActive && !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.sortMode && !m.oldMode && !m.taskCreateMode {
+				// Enter task filter mode
+				m.taskFilterMode = true
+			}
+
+		case "a":
+			if m.taskFilterMode {
+				// Show all tasks
+				m.applyTaskFilter("all", "")
+				m.taskFilterMode = false
+			}
+
+		case "o":
+			if m.taskFilterMode {
+				// Show only open tasks
+				m.applyTaskFilter("open", "")
+				m.taskFilterMode = false
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.oldMode && !m.taskCreateMode {
+				// Enter sort mode
+				m.sortMode = true
+			}
+
+		case "c":
+			if m.taskFilterMode {
+				// Show active tasks (open, paused, delegated)
+				m.applyTaskFilter("active", "")
+				m.taskFilterMode = false
+			}
+
+		case "v":
+			if m.taskFilterMode {
+				// Show overdue tasks
+				m.applyTaskFilter("overdue", "")
+				m.taskFilterMode = false
+			}
+
+		case "w":
+			if m.taskFilterMode {
+				// Show tasks due this week
+				m.applyTaskFilter("week", "")
+				m.taskFilterMode = false
+			}
+			
+		case "x":
+			if m.taskFilterMode && m.taskAreaContext != "" {
+				// Clear area context
+				m.taskAreaContext = ""
+				m.refreshTaskView()
+				m.taskFilterMode = false
+				return m, ui.ShowSuccess("Area filter cleared")
+			}
+
+		case "A":
+			if m.taskFilterMode {
+				// Show area selection submenu
+				areas := denote.GetUniqueAreas(m.tasks)
+				if len(areas) > 0 {
+					m.taskFilterMode = false
+					m.areaSelectMode = true
+					m.availableAreas = areas
+					m.areaSelectCursor = 0
+				} else {
+					m.taskFilterMode = false
+					return m, ui.ShowInfo("No areas found")
+				}
+			}
+
+		case "P":
+			if m.taskFilterMode {
+				// Show projects only
+				m.showProjectsOnly()
+				m.taskFilterMode = false
+			} else if m.taskModeActive && m.taskFilterType == "projects" {
+				// Debug: show current state
+				return m, ui.ShowInfo(fmt.Sprintf("Projects: %d, FilterType: %s", len(m.projects), m.taskFilterType))
+			}
+
+
+		case "backspace":
+			if m.taskModeActive {
+				// Handle different contexts
+				if m.taskAreaContext != "" && m.taskStatusFilter != "" {
+					// Clear status filter but keep area context
+					m.taskStatusFilter = ""
+					m.taskFilterType = "all"
+					m.refreshTaskView()
+					return m, ui.ShowInfo(fmt.Sprintf("Showing all tasks in area: %s", m.taskAreaContext))
+				} else if m.taskAreaContext != "" {
+					// Clear area context
+					m.taskAreaContext = ""
+					m.refreshTaskView()
+					return m, ui.ShowInfo("Area filter cleared")
+				} else if m.taskFilterType == "project" && m.taskFilterProject != "" {
+					// Was viewing project tasks, go back to projects
+					m.showProjectsOnly()
+					return m, ui.ShowInfo("Back to projects")
+				} else if m.taskFilterType == "projects" {
+					// Was viewing projects, go back to all tasks
+					// Need to reload tasks since they were set to nil
+					scanner := denote.NewScanner(m.getTasksDirectory())
+					tasks, err := scanner.FindTasks()
+					if err == nil && len(tasks) > 0 {
+						m.tasks = tasks
+						m.applyTaskFilter("all", "")
+						return m, ui.ShowInfo("Showing all tasks")
+					} else {
+						return m, ui.ShowError("No tasks found")
+					}
+				} else if m.taskFilterType != "" && m.taskFilterType != "all" {
+					// Clear filter and show all tasks
+					m.applyTaskFilter("all", "")
+					return m, ui.ShowInfo("Showing all tasks")
+				}
+			}
+
 		case "up", "k":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor > 0 {
+			if m.areaSelectMode {
+				if m.areaSelectCursor > 0 {
+					m.areaSelectCursor--
+				}
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor > 0 {
 				m.cursor--
 				// Don't auto-load preview on cursor movement
 			}
@@ -1729,7 +2216,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.waitingForSecondG = false
 
 		case "down", "j":
-			if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered)-1 {
+			if m.areaSelectMode {
+				if m.areaSelectCursor < len(m.availableAreas)-1 {
+					m.areaSelectCursor++
+				}
+			} else if !m.searchMode && !m.createMode && !m.tagMode && !m.tagCreateMode && !m.deleteMode && !m.taskCreateMode && m.cursor < len(m.filtered)-1 {
 				m.cursor++
 				// Don't auto-load preview on cursor movement
 			}
@@ -1763,6 +2254,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.deleteMode {
 				// Don't delete on enter - require explicit 'y' confirmation
 				return m, nil
+			} else if m.areaSelectMode {
+				// Select the area under cursor
+				if m.areaSelectCursor < len(m.availableAreas) {
+					selectedArea := m.availableAreas[m.areaSelectCursor]
+					m.areaSelectMode = false
+					m.availableAreas = nil
+					m.areaSelectCursor = 0
+					m.applyTaskFilter("area", selectedArea)
+					return m, ui.ShowSuccess(fmt.Sprintf("Filtering by area: %s", selectedArea))
+				}
 			} else if m.tagMode {
 				// Search for the tag
 				tag := m.tagInput.Value()
@@ -1826,48 +2327,115 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Get the title
 				title := m.createInput.Value()
 				if title != "" {
-					// Check if we should prompt for tags
-					if m.config.AddFrontmatter && m.config.PromptForTags {
-						// Transition to tag input mode
-						m.pendingTitle = title
-						m.createMode = false
-						m.createInput.SetValue("")
-						m.tagCreateMode = true
-						m.tagCreateInput.Focus()
-						return m, nil
-					} else {
-						// Create note without tags
+					if m.taskModeActive {
+						// Create a task file
 						var filename string
 						var identifier string
 						if m.config.DenoteFilenames {
-							filename, identifier = generateDenoteName(title, []string{}, time.Now())
+							// Tasks always have the "task" tag
+							filename, identifier = generateDenoteName(title, []string{"task"}, time.Now())
 						} else {
-							filename = titleToFilename(title)
+							filename = titleToFilename(title) 
+							// Ensure it ends with -task.md for non-denote mode
+							filename = strings.TrimSuffix(filename, ".md") + "-task.md"
 							identifier = ""
 						}
-						fullPath := filepath.Join(m.cwd, filename)
+						fullPath := filepath.Join(m.getTasksDirectory(), filename)
 						
-						// Create the file with templated content
-						content := generateNoteContent(title, m.config, identifier, nil)
+						// Get next task ID from counter
+						counter, err := denote.GetIDCounter(m.getTasksDirectory())
+						if err != nil {
+							return m, ui.ShowError(fmt.Sprintf("Failed to get ID counter: %v", err))
+						}
+						taskID, err := counter.NextID()
+						if err != nil {
+							return m, ui.ShowError(fmt.Sprintf("Failed to get next task ID: %v", err))
+						}
+						
+						// Create the task file with task template
+						content := generateTaskContent(title, m.config, identifier, taskID)
 						if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 							m.selected = fullPath
-							// Refresh file list to include new file
-							files, _ := findMarkdownFiles(m.cwd)
-							m.files = m.applySorting(files)
-							m.filtered = m.files
-							// Find and select the new file
-							for i, f := range m.filtered {
-								if f == fullPath {
-									m.cursor = i
-									break
+							// Reload tasks
+							scanner := denote.NewScanner(m.getTasksDirectory())
+							if tasks, err := scanner.FindTasks(); err == nil {
+								m.tasks = tasks
+								// Apply current sorting
+								if m.taskSortBy != "" {
+									denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+								}
+								// Update file lists
+								m.files = make([]string, len(m.tasks))
+								m.filtered = make([]string, len(m.tasks))
+								for i, task := range m.tasks {
+									m.files[i] = task.Path
+									m.filtered[i] = task.Path
+								}
+								// Find and select the new task
+								for i, f := range m.filtered {
+									if f == fullPath {
+										m.cursor = i
+										break
+									}
 								}
 							}
 							// Exit create mode and open editor
 							m.createMode = false
 							m.createInput.SetValue("")
-							return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-								return clearSelectedMsg{}
-							})
+							m.createInput.Placeholder = "Note title..."
+							// Show success message with task ID
+							cmds := []tea.Cmd{
+								ui.ShowSuccess(fmt.Sprintf("Created task #%d: %s", taskID, title)),
+								tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+									return clearSelectedMsg{}
+								}),
+							}
+							return m, tea.Batch(cmds...)
+						}
+					} else {
+						// Check if we should prompt for tags (normal note creation)
+						if m.config.AddFrontmatter && m.config.PromptForTags {
+							// Transition to tag input mode
+							m.pendingTitle = title
+							m.createMode = false
+							m.createInput.SetValue("")
+							m.tagCreateMode = true
+							m.tagCreateInput.Focus()
+							return m, nil
+						} else {
+							// Create note without tags
+							var filename string
+							var identifier string
+							if m.config.DenoteFilenames {
+								filename, identifier = generateDenoteName(title, []string{}, time.Now())
+							} else {
+								filename = titleToFilename(title)
+								identifier = ""
+							}
+							fullPath := filepath.Join(m.cwd, filename)
+							
+							// Create the file with templated content
+							content := generateNoteContent(title, m.config, identifier, nil)
+							if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+								m.selected = fullPath
+								// Refresh file list to include new file
+								files, _ := findMarkdownFiles(m.cwd)
+								m.files = m.applySorting(files)
+								m.filtered = m.files
+								// Find and select the new file
+								for i, f := range m.filtered {
+									if f == fullPath {
+										m.cursor = i
+										break
+									}
+								}
+								// Exit create mode and open editor
+								m.createMode = false
+								m.createInput.SetValue("")
+								return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+									return clearSelectedMsg{}
+								})
+							}
 						}
 					}
 				}
@@ -1976,6 +2544,48 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.taskCreateMode = false
 				m.taskCreateInput.SetValue("")
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
+				// Handle special case for project view
+				if m.taskModeActive && m.taskFilterType == "projects" && len(m.projects) > 0 {
+					// When in project view, enter shows tasks for that project
+					projectPath := m.filtered[m.cursor]
+					for _, project := range m.projects {
+						if project.Path == projectPath {
+							// Show tasks for this project
+							// Use the identifier if available, otherwise use title
+							var projectKey string
+							
+							// First priority: use identifier field if available
+							if project.ProjectMetadata.Identifier != "" {
+								projectKey = project.ProjectMetadata.Identifier
+							} else {
+								// Otherwise use the title
+								projectKey = project.ProjectMetadata.Title
+								if projectKey == "" {
+									// Fallback to note title if project-specific title not set
+									projectKey = project.Note.Title
+								}
+								if projectKey == "" {
+									// Last resort: extract from filename
+									projectSlug := strings.TrimSuffix(filepath.Base(project.Path), ".md")
+									parts := strings.SplitN(projectSlug, "-", 2)
+									if len(parts) >= 2 {
+										titlePart := parts[1]
+										if tagIdx := strings.Index(titlePart, "__"); tagIdx >= 0 {
+											titlePart = titlePart[:tagIdx]
+										}
+										projectKey = titlePart
+									}
+								}
+							}
+							
+							cmd := m.showProjectTasks(projectKey)
+							return m, cmd
+						}
+					}
+					// If we get here, something went wrong
+					return m, ui.ShowError("Could not find project")
+				}
+				
 				// Preview: use external if configured, otherwise internal
 				m.selected = m.filtered[m.cursor]
 				if m.config.PreviewCommand != "" {
@@ -2090,11 +2700,160 @@ func (m model) openInPreview() *exec.Cmd {
 	return cmd
 }
 func (m model) View() string {
+	// Handle area selection mode separately
+	if m.areaSelectMode {
+		return m.renderAreaSelectMode()
+	}
+	
+	// Handle task edit mode
+	if m.taskEditMode {
+		return m.renderTaskEditMode()
+	}
+	
 	// Sync state with UI integration
 	m.syncUIState()
 	
 	// Use new UI system
 	return m.ui.Render()
+}
+
+// renderAreaSelectMode renders the area selection interface
+func (m model) renderAreaSelectMode() string {
+	var content strings.Builder
+	
+	// Header
+	header := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39")).
+		Render("Select Area")
+	content.WriteString(header + "\n\n")
+	
+	// List areas with cursor
+	for i, area := range m.availableAreas {
+		cursor := "  "
+		if i == m.areaSelectCursor {
+			cursor = "> "
+		}
+		
+		line := fmt.Sprintf("%s%s", cursor, area)
+		if i == m.areaSelectCursor {
+			// Highlight selected line
+			line = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("39")).
+				Bold(true).
+				Render(line)
+		}
+		content.WriteString(line + "\n")
+	}
+	
+	// Footer with help
+	content.WriteString("\n")
+	help := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("240")).
+		Render("[Enter] select  [Esc] cancel  [↑↓/jk] navigate")
+	content.WriteString(help)
+	
+	// Center the content
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(content.String())
+}
+
+// renderTaskEditMode renders the task metadata edit interface
+func (m model) renderTaskEditMode() string {
+	if m.taskBeingEdited == nil {
+		return "Error: No task selected"
+	}
+	
+	var content strings.Builder
+	theme := ui.GetTheme(m.config.Theme)
+	
+	// Title - use metadata title if available, otherwise note title
+	taskTitle := m.taskBeingEdited.Note.Title
+	if m.taskBeingEdited.TaskMetadata.Title != "" {
+		taskTitle = m.taskBeingEdited.TaskMetadata.Title
+	}
+	title := fmt.Sprintf("Task #%d: %s", m.taskBeingEdited.TaskID, taskTitle)
+	titleStyle := theme.Modal.Title
+	content.WriteString(titleStyle.Render(title))
+	content.WriteString("\n\n")
+	
+	if m.taskEditField == "" {
+		// Show field selection menu
+		content.WriteString("Select field to edit:\n\n")
+		
+		fields := []struct {
+			key   string
+			label string
+			value string
+		}{
+			{"d", "Due date", m.taskBeingEdited.DueDate},
+			{"s", "Start date", m.taskBeingEdited.StartDate},
+			{"e", "Estimate", fmt.Sprintf("%d", m.taskBeingEdited.Estimate)},
+			{"p", "Priority", m.taskBeingEdited.Priority},
+			{"P", "Project", m.taskBeingEdited.Project},
+			{"a", "Area", m.taskBeingEdited.Area},
+			{"t", "Tags", strings.Join(m.taskBeingEdited.Tags, ", ")},
+		}
+		
+		for _, field := range fields {
+			value := field.value
+			if value == "" || value == "0" {
+				value = "(not set)"
+			}
+			line := fmt.Sprintf("[%s] %-12s: %s\n", 
+				theme.Help.Key.Render(field.key),
+				field.label,
+				value)
+			content.WriteString(line)
+		}
+		
+		content.WriteString("\n")
+		content.WriteString(theme.Help.Key.Render("[Esc]"))
+		content.WriteString(" Done")
+	} else {
+		// Show input for selected field
+		fieldName := ""
+		switch m.taskEditField {
+		case "due":
+			fieldName = "Due date"
+		case "start":
+			fieldName = "Start date"
+		case "estimate":
+			fieldName = "Estimate"
+		case "priority":
+			fieldName = "Priority"
+		case "project":
+			fieldName = "Project"
+		case "area":
+			fieldName = "Area"
+		case "tags":
+			fieldName = "Tags"
+		}
+		
+		content.WriteString(fmt.Sprintf("Editing %s:\n\n", fieldName))
+		content.WriteString(m.taskEditInput.View())
+		content.WriteString("\n\n")
+		content.WriteString(theme.Help.Key.Render("[Enter]"))
+		content.WriteString(" Save  ")
+		content.WriteString(theme.Help.Key.Render("[Esc]"))
+		content.WriteString(" Cancel")
+	}
+	
+	// Create modal box
+	box := theme.Modal.Border.
+		Width(60).
+		Padding(1, 2).
+		Render(content.String())
+	
+	// Center on screen
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Height(m.height).
+		Align(lipgloss.Center, lipgloss.Center).
+		Render(box)
 }
 
 // syncUIState synchronizes the model state with the UI integration
@@ -2103,9 +2862,11 @@ func (m *model) syncUIState() {
 		return
 	}
 	
-	// Update all UI state fields
-	m.ui.Files = m.files
-	m.ui.Filtered = m.filtered
+	// Always update files and filtered lists to ensure UI updates
+	m.ui.Files = make([]string, len(m.files))
+	copy(m.ui.Files, m.files)
+	m.ui.Filtered = make([]string, len(m.filtered))
+	copy(m.ui.Filtered, m.filtered)
 	m.ui.Cursor = m.cursor
 	m.ui.Selected = m.selected
 	m.ui.Width = m.width
@@ -2122,6 +2883,8 @@ func (m *model) syncUIState() {
 	m.ui.SortMode = m.sortMode
 	m.ui.OldMode = m.oldMode
 	m.ui.RenameMode = m.renameMode
+	m.ui.TaskFilterMode = m.taskFilterMode
+	// Area selection mode is handled separately, not passed to UI
 	
 	// Update inputs
 	m.ui.Search = m.search
@@ -2146,6 +2909,92 @@ func (m *model) syncUIState() {
 	m.ui.TaskFilter = m.taskFilter
 	m.ui.DailyFilter = m.dailyFilter
 	m.ui.OldFilter = m.oldFilter
+	
+	// Task mode state
+	m.ui.TaskModeActive = m.taskModeActive
+	m.ui.TaskSortBy = m.taskSortBy
+	m.ui.TaskAreaContext = m.taskAreaContext
+	m.ui.TaskStatusFilter = m.taskStatusFilter
+	
+	// Set task formatter function based on what we're showing
+	if m.taskModeActive {
+		if m.taskFilterType == "projects" && m.projects != nil {
+			// Create a closure that captures the projects slice
+			capturedProjects := m.projects
+			m.ui.TaskFormatter = func(path string) string {
+				// Find the project by path
+				for _, project := range capturedProjects {
+					if project.Path == path {
+						// Format project display
+						status := ""
+						switch project.Status {
+						case denote.ProjectStatusActive:
+							status = "● "
+						case denote.ProjectStatusCompleted:
+							status = "✓ "
+						case denote.ProjectStatusPaused:
+							status = "⏸ "
+						case denote.ProjectStatusCancelled:
+							status = "✗ "
+						}
+						
+						priority := ""
+						switch project.Priority {
+						case denote.PriorityP1:
+							priority = "[P1] "
+						case denote.PriorityP2:
+							priority = "[P2] "
+						case denote.PriorityP3:
+							priority = "[P3] "
+						}
+						
+						due := ""
+						if project.DueDate != "" {
+							if denote.IsOverdue(project.DueDate) {
+								due = " (overdue)"
+							} else {
+								days := denote.DaysUntilDue(project.DueDate)
+								if days == 0 {
+									due = " (today)"
+								} else if days == 1 {
+									due = " (tomorrow)"
+								} else if days <= 7 {
+									due = fmt.Sprintf(" (%dd)", days)
+								}
+							}
+						}
+						
+						// Use title from metadata if available
+						title := project.Note.Title
+						if title == "" {
+							// Fall back to just the filename without extension
+							title = strings.TrimSuffix(filepath.Base(path), ".md")
+						}
+						
+						// Add area prefix if available
+						if project.Area != "" {
+							title = fmt.Sprintf("%s / %s", project.Area, title)
+						}
+						
+						return fmt.Sprintf("%s%s%s%s", status, priority, title, due)
+					}
+				}
+				// If not found in projects, just return basename
+				return strings.TrimSuffix(filepath.Base(path), ".md")
+			}
+		} else {
+			// Regular task formatter
+			m.ui.TaskFormatter = func(path string) string {
+				task := m.findTaskByPath(path)
+				if task != nil {
+					return m.formatTaskLine(task)
+				}
+				return filepath.Base(path)
+			}
+		}
+	} else {
+		m.ui.TaskFormatter = nil
+	}
 }
 
 func (m model) renderPreviewPopover() string {
@@ -2210,10 +3059,521 @@ func (m model) renderPreviewPopover() string {
 	return centerStyle.Render(popover)
 }
 
+// toggleTaskMode switches between normal and task mode
+func (m *model) toggleTaskMode() tea.Cmd {
+	m.taskModeActive = !m.taskModeActive
+	
+	if m.taskModeActive {
+		// Load tasks
+		tasksDir := m.getTasksDirectory()
+		scanner := denote.NewScanner(tasksDir)
+		tasks, err := scanner.FindTasks()
+		if err != nil {
+			m.taskModeActive = false
+			return ui.ShowError(fmt.Sprintf("Failed to load tasks from %s: %v", tasksDir, err))
+		}
+		
+		if len(tasks) == 0 {
+			m.taskModeActive = false
+			return ui.ShowError(fmt.Sprintf("No tasks found in %s (looking for *__task*.md files)", tasksDir))
+		}
+		
+		m.tasks = tasks
+		
+		// Apply default task sorting
+		if m.taskSortBy == "" {
+			m.taskSortBy = "priority"
+		}
+		denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+		
+		// Update both files and filtered lists with task filenames
+		m.files = make([]string, len(m.tasks))
+		m.filtered = make([]string, len(m.tasks))
+		for i, task := range m.tasks {
+			m.files[i] = task.Path
+			m.filtered[i] = task.Path
+		}
+		
+		// Reset cursor and filters
+		m.cursor = 0
+		m.taskFilter = false
+		m.tagFilter = false
+		m.textFilter = false
+		m.dailyFilter = false
+		m.oldFilter = false
+		
+		// Set task formatter
+		m.ui.TaskFormatter = func(path string) string {
+			task := m.findTaskByPath(path)
+			if task != nil {
+				return m.formatTaskLine(task)
+			}
+			return filepath.Base(path)
+		}
+		m.ui.TaskModeActive = true
+		
+		// Apply area context if it exists
+		if m.taskAreaContext != "" {
+			m.refreshTaskView()
+			return ui.ShowInfo(fmt.Sprintf("Task mode: %d tasks in area %s", len(m.filtered), m.taskAreaContext))
+		}
+		
+		return ui.ShowInfo(fmt.Sprintf("Task mode: %d tasks", len(tasks)))
+	} else {
+		// Return to normal mode - reload all markdown files
+		m.tasks = nil
+		files, err := findMarkdownFiles(m.cwd)
+		if err == nil {
+			m.files = files
+			m.filtered = files
+		}
+		m.cursor = 0
+		
+		// Clear task formatter
+		m.ui.TaskFormatter = nil
+		m.ui.TaskModeActive = false
+		m.taskFilterType = ""
+		m.taskAreaContext = ""
+		m.taskStatusFilter = ""
+		
+		return ui.ShowInfo("Normal mode")
+	}
+}
+
+// findTaskByPath finds a task by its file path
+func (m model) findTaskByPath(path string) *denote.Task {
+	for _, task := range m.tasks {
+		if task.Path == path {
+			return task
+		}
+	}
+	return nil
+}
+
+// applyTaskSorting sorts tasks and updates the file lists
+func (m *model) applyTaskSorting() {
+	if m.taskSortBy == "" {
+		m.taskSortBy = "priority" // default
+	}
+	
+	// If we're showing projects, don't sort tasks
+	if m.taskFilterType == "projects" {
+		// Re-show projects with the current sort
+		m.showProjectsOnly()
+		return
+	}
+	
+	// Sort the tasks
+	denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+	
+	// Refresh the view to apply filters
+	m.refreshTaskView()
+	
+	// Update the task formatter to use the current sorted tasks
+	m.ui.TaskFormatter = func(path string) string {
+		task := m.findTaskByPath(path)
+		if task != nil {
+			return m.formatTaskLine(task)
+		}
+		return filepath.Base(path)
+	}
+	
+	// Sync UI state to ensure view updates
+	m.syncUIState()
+}
+
+// formatTaskLine formats a task for display in the file list
+func (m model) formatTaskLine(task *denote.Task) string {
+	// Status indicator
+	status := ""
+	switch task.Status {
+	case denote.TaskStatusDone:
+		status = "✓ "
+	case denote.TaskStatusPaused:
+		status = "⏸ "
+	case denote.TaskStatusDelegated:
+		status = "→ "
+	case denote.TaskStatusDropped:
+		status = "✗ "
+	default:
+		status = "○ "
+	}
+	
+	// Priority
+	priority := ""
+	if task.Priority != "" {
+		switch task.Priority {
+		case denote.PriorityP1:
+			priority = "[P1] "
+		case denote.PriorityP2:
+			priority = "[P2] "
+		case denote.PriorityP3:
+			priority = "[P3] "
+		}
+	}
+	
+	// Task ID
+	taskIDStr := ""
+	if task.TaskID > 0 {
+		taskIDStr = fmt.Sprintf("#%d ", task.TaskID)
+	}
+	
+	// Title (use metadata title if available)
+	title := task.Note.Title
+	if task.TaskMetadata.Title != "" {
+		title = task.TaskMetadata.Title
+	}
+	
+	// Project
+	project := ""
+	if task.Project != "" {
+		project = " @" + task.Project
+	}
+	
+	// Area
+	area := ""
+	if task.Area != "" {
+		area = " #" + task.Area
+	}
+	
+	// Estimate
+	estimate := ""
+	if task.Estimate > 0 {
+		estimate = fmt.Sprintf(" ~%d", task.Estimate)
+	}
+	
+	// Due date
+	due := ""
+	if task.DueDate != "" {
+		if denote.IsOverdue(task.DueDate) {
+			days := -denote.DaysUntilDue(task.DueDate)
+			due = fmt.Sprintf(" (OVERDUE %d days)", days)
+		} else {
+			days := denote.DaysUntilDue(task.DueDate)
+			if days == 0 {
+				due = " (due today)"
+			} else if days == 1 {
+				due = " (due tomorrow)"
+			} else if days <= 7 {
+				due = fmt.Sprintf(" (due in %d days)", days)
+			} else {
+				due = fmt.Sprintf(" (due %s)", task.DueDate)
+			}
+		}
+	}
+	
+	// Build the line
+	return fmt.Sprintf("%s%s%s%s%s%s%s%s", status, priority, taskIDStr, title, project, area, estimate, due)
+}
+
+// applyTaskFilter applies a filter to the task list
+func (m *model) applyTaskFilter(filterType string, filterValue string) {
+	// Reload tasks if they're nil (e.g., coming back from projects view)
+	if m.tasks == nil {
+		scanner := denote.NewScanner(m.getTasksDirectory())
+		tasks, err := scanner.FindTasks()
+		if err != nil || len(tasks) == 0 {
+			// No tasks found, update UI accordingly
+			m.files = []string{}
+			m.filtered = []string{}
+			m.taskFilterType = filterType
+			m.cursor = 0
+			return
+		}
+		m.tasks = tasks
+	}
+	
+	// Special handling for area filter - set context
+	if filterType == "area" {
+		m.taskAreaContext = filterValue
+		m.taskStatusFilter = "" // Reset status filter when changing area
+		m.refreshTaskView()
+		return
+	}
+	
+	// Special handling for project filter
+	if filterType == "project" {
+		m.taskFilterType = filterType
+		m.taskFilterProject = filterValue
+		m.refreshTaskView()
+		return
+	}
+	
+	// For other filters, set the appropriate filter
+	if filterType == "all" {
+		m.taskStatusFilter = ""
+	} else {
+		m.taskStatusFilter = filterType
+	}
+	m.taskFilterType = filterType
+	
+	m.refreshTaskView()
+}
+
+// refreshTaskView applies both area context and status filters
+func (m *model) refreshTaskView() {
+	if m.tasks == nil {
+		return
+	}
+	
+	// Start with all tasks
+	filteredTasks := m.tasks
+	
+	// Apply filters in order: project -> area -> status
+	
+	// Apply project filter if set
+	if m.taskFilterType == "project" && m.taskFilterProject != "" {
+		filteredTasks = denote.FilterTasks(filteredTasks, "project", m.taskFilterProject)
+	}
+	
+	// Apply area context if set
+	if m.taskAreaContext != "" {
+		filteredTasks = denote.FilterTasks(filteredTasks, "area", m.taskAreaContext)
+	}
+	
+	// Then apply status filter if set
+	if m.taskStatusFilter != "" && m.taskStatusFilter != "all" {
+		filteredTasks = denote.FilterTasks(filteredTasks, m.taskStatusFilter, "")
+	}
+	
+	// Apply current sort to the filtered tasks
+	if m.taskSortBy != "" {
+		denote.SortTasks(filteredTasks, m.taskSortBy, m.reversedSort)
+	}
+	
+	// Update the file lists
+	m.files = make([]string, len(filteredTasks))
+	m.filtered = make([]string, len(filteredTasks))
+	for i, task := range filteredTasks {
+		m.files[i] = task.Path
+		m.filtered[i] = task.Path
+	}
+	
+	m.cursor = 0
+	
+	// Update the task formatter to use filteredTasks
+	// We need to capture the filtered tasks for the formatter
+	capturedFilteredTasks := filteredTasks
+	m.ui.TaskFormatter = func(path string) string {
+		// Look in the filtered tasks first
+		for _, task := range capturedFilteredTasks {
+			if task.Path == path {
+				return m.formatTaskLine(task)
+			}
+		}
+		// Fallback to looking in all tasks
+		task := m.findTaskByPath(path)
+		if task != nil {
+			return m.formatTaskLine(task)
+		}
+		return filepath.Base(path)
+	}
+}
+
+// showProjectsOnly switches to showing only project files
+func (m *model) showProjectsOnly() {
+	scanner := denote.NewScanner(m.getTasksDirectory())
+	projects, err := scanner.FindProjects()
+	
+	if err == nil && len(projects) > 0 {
+		// Store projects and clear tasks
+		m.projects = projects
+		m.tasks = nil
+		
+		// Update file lists with project paths
+		m.files = make([]string, len(projects))
+		m.filtered = make([]string, len(projects))
+		for i, project := range projects {
+			m.files[i] = project.Path
+			m.filtered[i] = project.Path
+		}
+		
+		m.taskFilterType = "projects"
+		m.cursor = 0
+		
+		// Make sure we're in task mode
+		m.ui.TaskModeActive = true
+		
+		// Create a closure that captures the projects slice
+		capturedProjects := projects
+		
+		// Update formatter to show project info
+		m.ui.TaskFormatter = func(path string) string {
+			// Find the project by path
+			for _, project := range capturedProjects {
+				if project.Path == path {
+					// Format project display
+					status := ""
+					switch project.Status {
+					case denote.ProjectStatusActive:
+						status = "● "
+					case denote.ProjectStatusCompleted:
+						status = "✓ "
+					case denote.ProjectStatusPaused:
+						status = "⏸ "
+					case denote.ProjectStatusCancelled:
+						status = "✗ "
+					}
+					
+					priority := ""
+					switch project.Priority {
+					case denote.PriorityP1:
+						priority = "[P1] "
+					case denote.PriorityP2:
+						priority = "[P2] "
+					case denote.PriorityP3:
+						priority = "[P3] "
+					}
+					
+					due := ""
+					if project.DueDate != "" {
+						if denote.IsOverdue(project.DueDate) {
+							due = " (overdue)"
+						} else {
+							days := denote.DaysUntilDue(project.DueDate)
+							if days == 0 {
+								due = " (today)"
+							} else if days == 1 {
+								due = " (tomorrow)"
+							} else if days <= 7 {
+								due = fmt.Sprintf(" (%dd)", days)
+							}
+						}
+					}
+					
+					// Use title from metadata if available
+					title := project.Note.Title
+					if title == "" {
+						// Fall back to just the filename without extension
+						title = strings.TrimSuffix(filepath.Base(path), ".md")
+					}
+					
+					// Add area prefix if available
+					if project.Area != "" {
+						title = fmt.Sprintf("%s / %s", project.Area, title)
+					}
+					
+					return fmt.Sprintf("%s%s%s%s", status, priority, title, due)
+				}
+			}
+			// If not found in projects, just return basename
+			return strings.TrimSuffix(filepath.Base(path), ".md")
+		}
+	}
+}
+
+// showProjectTasks shows tasks filtered by project name
+func (m *model) showProjectTasks(projectName string) tea.Cmd {
+	// First reload all tasks
+	scanner := denote.NewScanner(m.getTasksDirectory())
+	tasks, err := scanner.FindTasks()
+	if err != nil {
+		return ui.ShowError("Failed to load tasks")
+	}
+	
+	m.tasks = tasks
+	
+	// Apply default sorting
+	if m.taskSortBy == "" {
+		m.taskSortBy = "priority"
+	}
+	denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
+	
+	// Set the task formatter back
+	m.ui.TaskFormatter = func(path string) string {
+		task := m.findTaskByPath(path)
+		if task != nil {
+			return m.formatTaskLine(task)
+		}
+		return filepath.Base(path)
+	}
+	
+	// Try different variations of the project name, including case variations
+	// The project file might have "Oncall" as title but tasks have "oncall" as project
+	
+	baseVariations := []string{projectName}
+	
+	// Remove all hyphens
+	withoutHyphens := strings.ReplaceAll(projectName, "-", "")
+	if withoutHyphens != projectName {
+		baseVariations = append(baseVariations, withoutHyphens)
+	}
+	
+	// First word only
+	if idx := strings.Index(projectName, "-"); idx > 0 {
+		firstWord := projectName[:idx]
+		baseVariations = append(baseVariations, firstWord)
+	}
+	
+	// For each base variation, try both original case and lowercase
+	variations := []string{}
+	for _, base := range baseVariations {
+		variations = append(variations, base)
+		if lower := strings.ToLower(base); lower != base {
+			variations = append(variations, lower)
+		}
+	}
+	
+	// Try each variation
+	var filteredCount int
+	var matchedVariation string
+	foundMatch := false
+	
+	// Before trying variations, ensure we start with all tasks
+	m.taskFilterType = ""
+	m.taskStatusFilter = ""
+	m.refreshTaskView()
+	
+	for _, variant := range variations {
+		m.applyTaskFilter("project", variant)
+		if len(m.filtered) > 0 {
+			filteredCount = len(m.filtered)
+			matchedVariation = variant
+			m.taskFilterProject = variant
+			foundMatch = true
+			break
+		}
+	}
+	
+	if foundMatch && filteredCount > 0 {
+		// Double-check that we actually have the right tasks
+		// Count how many actually have this project
+		actualCount := 0
+		for _, taskPath := range m.filtered {
+			if task := m.findTaskByPath(taskPath); task != nil && task.Project == matchedVariation {
+				actualCount++
+			}
+		}
+		
+		if actualCount != filteredCount {
+			return ui.ShowError(fmt.Sprintf("Filter mismatch: showing %d tasks but only %d have project '%s'", 
+				filteredCount, actualCount, matchedVariation))
+		}
+		
+		return ui.ShowInfo(fmt.Sprintf("Project '%s': %d tasks", matchedVariation, filteredCount))
+	} else {
+		// No matches - show what projects we have
+		projectSet := make(map[string]bool)
+		for _, task := range m.tasks {
+			if task.Project != "" {
+				projectSet[task.Project] = true
+			}
+		}
+		var availableProjects []string
+		for p := range projectSet {
+			availableProjects = append(availableProjects, p)
+		}
+		sort.Strings(availableProjects)
+		
+		return ui.ShowError(fmt.Sprintf("No tasks for '%s'. Available projects: %v", projectName, availableProjects))
+	}
+}
+
 func main() {
 	// Parse command line flags
 	var tag = flag.String("tag", "", "Filter notes by tag (e.g., --tag=@mikeh)")
 	var openID = flag.String("open-id", "", "Open note with specific Denote identifier (e.g., --open-id=20241225T093015)")
+	var taskMode = flag.Bool("tasks", false, "Start in task mode (requires denote_tasks_support=true in config)")
 	flag.Parse()
 
 	// Load config first
@@ -2223,6 +3583,11 @@ func main() {
 	args := flag.Args()
 	if len(args) > 0 {
 		dir := args[0]
+		// Expand tilde in directory path
+		if strings.HasPrefix(dir, "~/") {
+			home, _ := os.UserHomeDir()
+			dir = filepath.Join(home, dir[2:])
+		}
 		if err := os.Chdir(dir); err != nil {
 			log.Fatal(err)
 		}
@@ -2323,7 +3688,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	p := tea.NewProgram(initialModel(*tag), tea.WithAltScreen())
+	p := tea.NewProgram(initialModel(config, *tag, *taskMode), tea.WithAltScreen())
 	m, err := p.Run()
 	if err != nil {
 		log.Fatal(err)
@@ -2371,5 +3736,222 @@ func main() {
 			fmt.Printf("Error opening editor: %v\n", err)
 			fmt.Printf("Selected file: %s\n", m.selected)
 		}
+	}
+}
+
+// processTaskFieldUpdate handles updating a task field with the current input value
+func (m *model) processTaskFieldUpdate() tea.Cmd {
+	if m.taskBeingEdited == nil || m.taskEditField == "" {
+		return nil
+	}
+	
+	value := strings.TrimSpace(m.taskEditInput.Value())
+	var err error
+	var successMsg string
+	
+	switch m.taskEditField {
+	case "due":
+		// Parse relative dates
+		if value != "" {
+			parsedDate, parseErr := parseRelativeDate(value)
+			if parseErr != nil {
+				return ui.ShowError(fmt.Sprintf("Invalid date: %v", parseErr))
+			}
+			value = parsedDate
+		}
+		err = denote.UpdateTaskDueDate(m.taskBeingEdited.Path, value)
+		if err == nil {
+			m.taskBeingEdited.DueDate = value
+			successMsg = fmt.Sprintf("Updated due date for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "start":
+		// Parse relative dates
+		if value != "" {
+			parsedDate, parseErr := parseRelativeDate(value)
+			if parseErr != nil {
+				return ui.ShowError(fmt.Sprintf("Invalid date: %v", parseErr))
+			}
+			value = parsedDate
+		}
+		err = denote.UpdateTaskStartDate(m.taskBeingEdited.Path, value)
+		if err == nil {
+			m.taskBeingEdited.StartDate = value
+			successMsg = fmt.Sprintf("Updated start date for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "estimate":
+		estimate := 0
+		if value != "" {
+			estimate, err = strconv.Atoi(value)
+			if err != nil {
+				return ui.ShowError("Estimate must be a number")
+			}
+		}
+		err = denote.UpdateTaskEstimate(m.taskBeingEdited.Path, estimate)
+		if err == nil {
+			m.taskBeingEdited.Estimate = estimate
+			successMsg = fmt.Sprintf("Updated estimate for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "priority":
+		// Normalize priority input
+		priority := value
+		if priority == "1" {
+			priority = "p1"
+		} else if priority == "2" {
+			priority = "p2"
+		} else if priority == "3" {
+			priority = "p3"
+		}
+		err = denote.UpdateTaskPriority(m.taskBeingEdited.Path, priority)
+		if err == nil {
+			m.taskBeingEdited.Priority = priority
+			successMsg = fmt.Sprintf("Updated priority for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "project":
+		err = denote.UpdateTaskProject(m.taskBeingEdited.Path, value)
+		if err == nil {
+			m.taskBeingEdited.Project = value
+			successMsg = fmt.Sprintf("Updated project for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "area":
+		err = denote.UpdateTaskArea(m.taskBeingEdited.Path, value)
+		if err == nil {
+			m.taskBeingEdited.Area = value
+			successMsg = fmt.Sprintf("Updated area for task #%d", m.taskBeingEdited.TaskID)
+		}
+		
+	case "tags":
+		// Parse comma-delimited tags
+		var tags []string
+		if value != "" {
+			// Split by comma and trim whitespace
+			parts := strings.Split(value, ",")
+			for _, tag := range parts {
+				trimmed := strings.TrimSpace(tag)
+				if trimmed != "" {
+					tags = append(tags, trimmed)
+				}
+			}
+		}
+		err = denote.UpdateTaskTags(m.taskBeingEdited.Path, tags)
+		if err == nil {
+			m.taskBeingEdited.Tags = tags
+			successMsg = fmt.Sprintf("Updated tags for task #%d", m.taskBeingEdited.TaskID)
+		}
+	}
+	
+	if err != nil {
+		return ui.ShowError(fmt.Sprintf("Failed to update: %v", err))
+	}
+	
+	// Reset to field selection (stay in edit mode)
+	m.taskEditField = ""
+	m.taskEditInput.SetValue("")
+	m.taskEditInput.Placeholder = ""
+	
+	return ui.ShowSuccess(successMsg)
+}
+
+// parseRelativeDate parses relative date strings like "today", "tomorrow", "3d", "1w"
+func parseRelativeDate(dateStr string) (string, error) {
+	if dateStr == "" {
+		return "", nil
+	}
+	
+	now := time.Now()
+	var targetDate time.Time
+	
+	lowerStr := strings.ToLower(dateStr)
+	
+	// Check for relative date keywords
+	switch lowerStr {
+	case "today":
+		targetDate = now
+	case "tomorrow":
+		targetDate = now.AddDate(0, 0, 1)
+	case "next week":
+		targetDate = now.AddDate(0, 0, 7)
+	case "next month":
+		targetDate = now.AddDate(0, 1, 0)
+	default:
+		// Try parsing as day of week
+		if weekday, ok := parseDayOfWeek(lowerStr); ok {
+			targetDate = getNextWeekday(now, weekday)
+		} else if duration, ok := parseRelativeDuration(lowerStr); ok {
+			// Parse relative durations like "3d", "2w", "1m"
+			targetDate = now.Add(duration)
+		} else {
+			// Try parsing as absolute date
+			parsed, err := time.Parse("2006-01-02", dateStr)
+			if err != nil {
+				return "", fmt.Errorf("invalid date format: %s (use YYYY-MM-DD, day name, or relative like '3d', '2w', '1m')", dateStr)
+			}
+			targetDate = parsed
+		}
+	}
+	
+	return targetDate.Format("2006-01-02"), nil
+}
+
+// parseDayOfWeek parses day names
+func parseDayOfWeek(day string) (time.Weekday, bool) {
+	days := map[string]time.Weekday{
+		"sunday":    time.Sunday,
+		"sun":       time.Sunday,
+		"monday":    time.Monday,
+		"mon":       time.Monday,
+		"tuesday":   time.Tuesday,
+		"tue":       time.Tuesday,
+		"wednesday": time.Wednesday,
+		"wed":       time.Wednesday,
+		"thursday":  time.Thursday,
+		"thu":       time.Thursday,
+		"friday":    time.Friday,
+		"fri":       time.Friday,
+		"saturday":  time.Saturday,
+		"sat":       time.Saturday,
+	}
+	
+	weekday, ok := days[day]
+	return weekday, ok
+}
+
+// getNextWeekday gets the next occurrence of a weekday
+func getNextWeekday(from time.Time, weekday time.Weekday) time.Time {
+	daysUntil := int(weekday - from.Weekday())
+	if daysUntil <= 0 {
+		daysUntil += 7
+	}
+	return from.AddDate(0, 0, daysUntil)
+}
+
+// parseRelativeDuration parses durations like "3d", "2w", "1m"
+func parseRelativeDuration(s string) (time.Duration, bool) {
+	if len(s) < 2 {
+		return 0, false
+	}
+	
+	// Extract number and unit
+	numStr := s[:len(s)-1]
+	unit := s[len(s)-1:]
+	
+	num, err := strconv.Atoi(numStr)
+	if err != nil {
+		return 0, false
+	}
+	
+	switch unit {
+	case "d": // days
+		return time.Duration(num) * 24 * time.Hour, true
+	case "w": // weeks
+		return time.Duration(num) * 7 * 24 * time.Hour, true
+	case "m": // months (approximate as 30 days)
+		return time.Duration(num) * 30 * 24 * time.Hour, true
+	default:
+		return 0, false
 	}
 }

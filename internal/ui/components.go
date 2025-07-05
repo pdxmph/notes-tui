@@ -24,6 +24,7 @@ type ListView struct {
 	ShowCursor   bool
 	EmptyMessage string
 	Style        ListStyle
+	ItemFormatter func(string) string // Optional custom formatter
 }
 
 type ListStyle struct {
@@ -39,20 +40,100 @@ func (l ListView) View() string {
 
 	var content strings.Builder
 	maxVisible := l.Height
-	startIdx := 0
+	if maxVisible <= 0 {
+		maxVisible = 1
+	}
+	
+	// Simple approach: just show items without indicators if height is too small
+	if maxVisible < 3 && len(l.Items) > maxVisible {
+		// Not enough room for indicators, just show items around cursor
+		startIdx := l.Cursor
+		if startIdx > len(l.Items) - maxVisible {
+			startIdx = len(l.Items) - maxVisible
+		}
+		if startIdx < 0 {
+			startIdx = 0
+		}
+		
+		for i := startIdx; i < len(l.Items) && i < startIdx+maxVisible; i++ {
+			cursor := "  "
+			if l.ShowCursor && l.Cursor == i {
+				cursor = "> "
+			}
 
-	// Adjust viewport to keep cursor visible
-	if l.Cursor >= maxVisible {
-		startIdx = l.Cursor - maxVisible + 1
+			item := l.Items[i]
+			if l.ItemFormatter != nil {
+				item = l.ItemFormatter(item)
+			}
+			
+			maxLen := l.Width - 3
+			if len(item) > maxLen && maxLen > 3 {
+				item = item[:maxLen-3] + "..."
+			}
+
+			line := fmt.Sprintf("%s%s", cursor, item)
+			if l.ShowCursor && l.Cursor == i {
+				content.WriteString(l.Style.Cursor.Render(line))
+			} else {
+				content.WriteString(l.Style.Item.Render(line))
+			}
+			
+			if i < startIdx+maxVisible-1 {
+				content.WriteString("\n")
+			}
+		}
+		return content.String()
+	}
+	
+	// Normal case with indicators
+	startIdx := 0
+	endIdx := len(l.Items)
+	
+	// If list is scrollable, calculate viewport
+	if len(l.Items) > maxVisible {
+		// Keep cursor in the middle third of the view when possible
+		preferredStart := l.Cursor - maxVisible/3
+		
+		// Adjust bounds
+		if preferredStart < 0 {
+			startIdx = 0
+		} else if preferredStart + maxVisible > len(l.Items) {
+			startIdx = len(l.Items) - maxVisible
+		} else {
+			startIdx = preferredStart
+		}
+		
+		endIdx = startIdx + maxVisible
+	}
+	
+	// Show top indicator if needed
+	if startIdx > 0 {
+		indicator := fmt.Sprintf("... %d items above", startIdx)
+		content.WriteString(l.Style.EmptyMsg.Render(indicator))
+		content.WriteString("\n")
+		startIdx++ // Skip one item to make room for indicator
+	}
+	
+	// Show bottom indicator if needed
+	showBottomIndicator := endIdx < len(l.Items)
+	if showBottomIndicator {
+		endIdx-- // Reserve space for bottom indicator
 	}
 
-	for i := startIdx; i < len(l.Items) && i < startIdx+maxVisible; i++ {
+	// Render visible items
+	for i := startIdx; i < endIdx && i < len(l.Items); i++ {
 		cursor := "  "
 		if l.ShowCursor && l.Cursor == i {
 			cursor = "> "
 		}
 
 		item := l.Items[i]
+		
+		// Apply custom formatter if provided
+		if l.ItemFormatter != nil {
+			item = l.ItemFormatter(item)
+		}
+		
 		// Truncate if too long
 		maxLen := l.Width - 3
 		if len(item) > maxLen && maxLen > 3 {
@@ -66,18 +147,16 @@ func (l ListView) View() string {
 			content.WriteString(l.Style.Item.Render(line))
 		}
 		
-		if i < len(l.Items)-1 && i < startIdx+maxVisible-1 {
+		if i < endIdx-1 {
 			content.WriteString("\n")
 		}
 	}
 
-	// Add scroll indicator
-	if len(l.Items) > maxVisible {
-		remaining := len(l.Items) - startIdx - maxVisible
-		if remaining > 0 {
-			indicator := fmt.Sprintf("\n... %d more items", remaining)
-			content.WriteString(l.Style.EmptyMsg.Render(indicator))
-		}
+	// Add bottom indicator if needed
+	if showBottomIndicator {
+		remaining := len(l.Items) - endIdx
+		indicator := fmt.Sprintf("\n... %d more items", remaining)
+		content.WriteString(l.Style.EmptyMsg.Render(indicator))
 	}
 
 	return content.String()

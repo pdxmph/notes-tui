@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -40,6 +41,14 @@ type ViewState struct {
 	
 	// Configuration
 	TaskwarriorSupport bool
+	DenoteTasksSupport bool
+	
+	// Task mode
+	TaskModeActive bool
+	TaskSortBy     string
+	TaskFormatter  func(string) string
+	TaskAreaContext string
+	TaskStatusFilter string
 }
 
 // ViewMode represents the current interaction mode
@@ -57,6 +66,7 @@ const (
 	ModeDelete
 	ModePreview
 	ModeLoading
+	ModeTaskFilter
 )
 
 // ViewComposer handles view composition
@@ -101,8 +111,13 @@ func (v *ViewComposer) renderHeader() string {
 	filters := v.getActiveFilters()
 	sortInfo := v.getSortInfo()
 	
+	title := "Notes"
+	if v.state.TaskModeActive {
+		title = "Tasks"
+	}
+	
 	header := Header{
-		Title:     "Notes",
+		Title:     title,
 		FileCount: len(v.state.Filtered),
 		Filters:   filters,
 		SortInfo:  sortInfo,
@@ -142,6 +157,8 @@ func (v *ViewComposer) renderContent() string {
 		return v.renderOldFilterMode()
 	case ModeDelete:
 		return v.renderDeleteMode()
+	case ModeTaskFilter:
+		return v.renderTaskFilterMode()
 	default:
 		return v.renderFileList()
 	}
@@ -159,16 +176,52 @@ func (v *ViewComposer) renderFooter() string {
 
 // renderFileList creates the main file list view
 func (v *ViewComposer) renderFileList() string {
-	contentWidth, contentHeight := v.state.Layout.ContentArea()
+	contentWidth, _ := v.state.Layout.ContentArea()
 	
+	// Calculate available height for the list
+	// We need to account for header and footer that will be rendered
+	availableHeight := v.calculateAvailableHeight()
+	
+	// Use TaskListView for task mode
+	if v.state.TaskModeActive && v.state.TaskFormatter != nil {
+		// Parse task items from formatted strings
+		taskItems := make([]TaskItem, 0, len(v.state.Filtered))
+		for _, item := range v.state.Filtered {
+			// Apply formatter if available
+			formatted := v.state.TaskFormatter(item)
+			taskItem := ParseTaskItem(formatted)
+			taskItems = append(taskItems, taskItem)
+		}
+		
+		taskList := TaskListView{
+			Items:        taskItems,
+			Cursor:       v.state.Cursor,
+			Width:        contentWidth,
+			Height:       availableHeight,
+			ShowCursor:   true,
+			EmptyMessage: "No tasks found.",
+			Theme:        DefaultTaskTheme(),
+		}
+		
+		if len(v.state.Files) == 0 {
+			taskList.EmptyMessage = "No task files found."
+		} else if v.state.Mode == ModeSearch && v.state.SearchQuery != "" {
+			taskList.EmptyMessage = "No tasks match your search."
+		}
+		
+		return taskList.View()
+	}
+	
+	// Regular file list for non-task mode
 	list := ListView{
 		Items:        v.state.Filtered,
 		Cursor:       v.state.Cursor,
 		Width:        contentWidth,
-		Height:       contentHeight - 6, // Reserve space for header/footer
+		Height:       availableHeight,
 		ShowCursor:   true,
 		EmptyMessage: "No files found.",
 		Style:        v.state.Theme.List,
+		ItemFormatter: v.state.TaskFormatter,
 	}
 	
 	if len(v.state.Files) == 0 {
@@ -178,6 +231,31 @@ func (v *ViewComposer) renderFileList() string {
 	}
 	
 	return list.View()
+}
+
+// calculateAvailableHeight determines how much height is available for content
+func (v *ViewComposer) calculateAvailableHeight() int {
+	_, totalHeight := v.state.Layout.ContentArea()
+	
+	// Calculate header lines
+	header := v.renderHeader()
+	headerLines := strings.Count(header, "\n") + 1
+	if v.state.StatusMessage.Duration > 0 {
+		headerLines++ // Status message adds a line
+	}
+	
+	// Calculate footer lines (help bar is typically 2 lines)
+	footerLines := 2
+	
+	// Account for margins
+	margins := 2
+	
+	availableHeight := totalHeight - headerLines - footerLines - margins
+	if availableHeight < 1 {
+		availableHeight = 1
+	}
+	
+	return availableHeight
 }
 
 // renderSearchMode creates the search interface
@@ -283,9 +361,15 @@ func (v *ViewComposer) renderSortMode() string {
 	contentWidth, _ := v.state.Layout.ContentArea()
 	
 	var content string
-	content += v.state.Theme.Modal.Title.Render("Sort Files") + "\n\n"
-	content += "Choose sort method:\n"
-	content += "[d] Date  [m] Modified  [t] Title  [i] Denote  [r] Reverse\n\n"
+	if v.state.TaskModeActive {
+		content += v.state.Theme.Modal.Title.Render("Sort Tasks") + "\n\n"
+		content += "Choose sort method:\n"
+		content += "[d] Due date  [p] Priority  [s] Status  [m] Modified  [r] Reverse\n\n"
+	} else {
+		content += v.state.Theme.Modal.Title.Render("Sort Files") + "\n\n"
+		content += "Choose sort method:\n"
+		content += "[d] Date  [m] Modified  [t] Title  [i] Denote  [r] Reverse\n\n"
+	}
 	content += v.state.Theme.Modal.Help.Render("[Esc] cancel")
 	
 	return lipgloss.NewStyle().Width(contentWidth).Render(content)
@@ -327,6 +411,35 @@ func (v *ViewComposer) renderDeleteMode() string {
 	return dialog.View()
 }
 
+// renderTaskFilterMode creates the task filter selection interface
+func (v *ViewComposer) renderTaskFilterMode() string {
+	contentWidth, _ := v.state.Layout.ContentArea()
+	
+	var content string
+	content += v.state.Theme.Modal.Title.Render("Filter Tasks") + "\n\n"
+	
+	// Show current area context if set
+	if v.state.TaskAreaContext != "" {
+		content += fmt.Sprintf("Current area: %s\n\n", v.state.Theme.Help.Key.Render(v.state.TaskAreaContext))
+	}
+	
+	content += "Status filters:\n"
+	content += "[a] All tasks  [o] Open only  [c] Active (not done/dropped)\n"
+	content += "[v] Overdue  [w] Due this week\n\n"
+	
+	content += "Context filters:\n"
+	content += "[A] By area  [p] By project  [P] Projects only\n"
+	
+	// Show option to clear area if one is set
+	if v.state.TaskAreaContext != "" {
+		content += "[x] Clear area filter\n"
+	}
+	
+	content += "\n" + v.state.Theme.Modal.Help.Render("[Esc] cancel")
+	
+	return lipgloss.NewStyle().Width(contentWidth).Render(content)
+}
+
 // renderPreview creates the preview popover
 func (v *ViewComposer) renderPreview() string {
 	popover := PreviewPopover{
@@ -361,36 +474,68 @@ func (v *ViewComposer) renderLoading() string {
 func (v *ViewComposer) renderHelpBar() string {
 	contentWidth, _ := v.state.Layout.ContentArea()
 	
-	// Split help into two lines like the original
-	// Line 1: Search, preview, and filters
-	line1Items := []HelpItem{
-		{Key: "/", Desc: "search"},
-		{Key: "Enter", Desc: "preview"},
-		{Key: "D", Desc: "all [D]aily"},
-		{Key: "t", Desc: "open [t]asks"},
-		{Key: "#", Desc: "tags"},
-		{Key: "o", Desc: "s[o]rt"},
-		{Key: "O", Desc: "days [O]ld"},
-	}
+	var line1Items, line2Items []HelpItem
 	
-	// Line 2: File operations
-	line2Items := []HelpItem{
-		{Key: "e", Desc: "[e]dit"},
-		{Key: "n", Desc: "[n]ew note"},
-		{Key: "d", Desc: "[d]aily note"},
+	if v.state.TaskModeActive {
+		// Task mode help
+		// Line 1: Task navigation and viewing
+		line1Items = []HelpItem{
+			{Key: "Enter", Desc: "view task"},
+			{Key: "f", Desc: "[f]ilter"},
+			{Key: "o", Desc: "s[o]rt"},
+			{Key: "Backspace", Desc: "back"},
+			{Key: "T", Desc: "[T]oggle notes mode"},
+			{Key: "/", Desc: "search"},
+		}
+		
+		// Line 2: Task operations
+		line2Items = []HelpItem{
+			{Key: "n", Desc: "[n]ew task"},
+			{Key: "e", Desc: "[e]dit"},
+			{Key: "u", Desc: "[u]pdate metadata"},
+			{Key: "d", Desc: "[d]one"},
+			{Key: "p", Desc: "[p]ause/unpause"},
+			{Key: "1/2/3", Desc: "set priority"},
+			{Key: "X", Desc: "delete"},
+			{Key: "q", Desc: "[q]uit"},
+		}
+	} else {
+		// Normal notes mode help
+		// Line 1: Search, preview, and filters
+		line1Items = []HelpItem{
+			{Key: "/", Desc: "search"},
+			{Key: "Enter", Desc: "preview"},
+			{Key: "D", Desc: "all [D]aily"},
+			{Key: "t", Desc: "open [t]asks"},
+			{Key: "#", Desc: "tags"},
+			{Key: "o", Desc: "s[o]rt"},
+			{Key: "O", Desc: "days [O]ld"},
+		}
+		
+		// Only show task mode toggle if enabled
+		if v.state.DenoteTasksSupport {
+			line1Items = append(line1Items, HelpItem{Key: "T", Desc: "[T]ask mode"})
+		}
+		
+		// Line 2: File operations
+		line2Items = []HelpItem{
+			{Key: "e", Desc: "[e]dit"},
+			{Key: "n", Desc: "[n]ew note"},
+			{Key: "d", Desc: "[d]aily note"},
+		}
+		
+		// Add TaskWarrior if enabled
+		if v.state.TaskwarriorSupport {
+			line2Items = append(line2Items, HelpItem{Key: "Ctrl+K", Desc: "task"})
+		}
+		
+		// Add remaining operations
+		line2Items = append(line2Items,
+			HelpItem{Key: "R", Desc: "Denote [R]ename"},
+			HelpItem{Key: "X", Desc: "delete"},
+			HelpItem{Key: "q", Desc: "[q]uit"},
+		)
 	}
-	
-	// Add TaskWarrior if enabled
-	if v.state.TaskwarriorSupport {
-		line2Items = append(line2Items, HelpItem{Key: "Ctrl+K", Desc: "task"})
-	}
-	
-	// Add remaining operations
-	line2Items = append(line2Items,
-		HelpItem{Key: "R", Desc: "Denote [R]ename"},
-		HelpItem{Key: "X", Desc: "delete"},
-		HelpItem{Key: "q", Desc: "[q]uit"},
-	)
 	
 	// Build the two help bars
 	help1 := HelpBar{
@@ -413,44 +558,97 @@ func (v *ViewComposer) renderHelpBar() string {
 
 func (v *ViewComposer) getActiveFilters() []string {
 	var filters []string
-	if v.state.TaskFilter {
-		filters = append(filters, "Tasks")
-	}
-	if v.state.TagFilter {
-		filters = append(filters, "Tag")
-	}
-	if v.state.TextFilter {
-		filters = append(filters, "Search")
-	}
-	if v.state.DailyFilter {
-		filters = append(filters, "Daily")
-	}
-	if v.state.OldFilter {
-		filters = append(filters, fmt.Sprintf("Last %d days", v.state.OldDays))
+	
+	// For task mode, show area context and status filter
+	if v.state.TaskModeActive {
+		if v.state.TaskAreaContext != "" {
+			filters = append(filters, fmt.Sprintf("Area: %s", v.state.TaskAreaContext))
+		}
+		if v.state.TaskStatusFilter != "" && v.state.TaskStatusFilter != "all" {
+			statusLabel := v.state.TaskStatusFilter
+			switch v.state.TaskStatusFilter {
+			case "open":
+				statusLabel = "Open only"
+			case "active":
+				statusLabel = "Active"
+			case "overdue":
+				statusLabel = "Overdue"
+			case "week":
+				statusLabel = "Due this week"
+			}
+			filters = append(filters, statusLabel)
+		}
+	} else {
+		// Regular note filters
+		if v.state.TaskFilter {
+			filters = append(filters, "Tasks")
+		}
+		if v.state.TagFilter {
+			filters = append(filters, "Tag")
+		}
+		if v.state.TextFilter {
+			filters = append(filters, "Search")
+		}
+		if v.state.DailyFilter {
+			filters = append(filters, "Daily")
+		}
+		if v.state.OldFilter {
+			filters = append(filters, fmt.Sprintf("Last %d days", v.state.OldDays))
+		}
 	}
 	return filters
 }
 
 func (v *ViewComposer) getSortInfo() string {
-	if v.state.CurrentSort == "" {
-		return ""
+	if v.state.TaskModeActive {
+		// Task mode sorting
+		if v.state.TaskSortBy == "" {
+			return ""
+		}
+		
+		sortLabel := ""
+		switch v.state.TaskSortBy {
+		case "priority":
+			sortLabel = "Priority"
+		case "due":
+			sortLabel = "Due Date"
+		case "status":
+			sortLabel = "Status"
+		case "modified":
+			sortLabel = "Modified"
+		case "id":
+			sortLabel = "Task ID"
+		case "created":
+			sortLabel = "Created"
+		}
+		
+		if v.state.ReversedSort {
+			sortLabel += " (reversed)"
+		}
+		
+		return sortLabel
+	} else {
+		// Regular note sorting
+		if v.state.CurrentSort == "" {
+			return ""
+		}
+		
+		sortLabel := ""
+		switch v.state.CurrentSort {
+		case "date":
+			sortLabel = "Date"
+		case "modified":
+			sortLabel = "Modified"
+		case "title":
+			sortLabel = "Title"
+		case "denote":
+			sortLabel = "Denote"
+		}
+		
+		if v.state.ReversedSort {
+			sortLabel += " (reversed)"
+		}
+		
+		return sortLabel
 	}
-	
-	sortLabel := ""
-	switch v.state.CurrentSort {
-	case "date":
-		sortLabel = "Date"
-	case "modified":
-		sortLabel = "Modified"
-	case "title":
-		sortLabel = "Title"
-	case "denote":
-		sortLabel = "Denote"
-	}
-	
-	if v.state.ReversedSort {
-		sortLabel += " (reversed)"
-	}
-	
-	return sortLabel
 }

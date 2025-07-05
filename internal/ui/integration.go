@@ -31,6 +31,7 @@ type ModelIntegration struct {
 	SortMode        bool
 	OldMode         bool
 	RenameMode      bool
+	TaskFilterMode  bool
 
 	// Mode-specific data
 	Search          textinput.Model
@@ -66,7 +67,15 @@ type ModelIntegration struct {
 	ShowTitles         bool
 	DenoteFilenames    bool
 	TaskwarriorSupport bool
+	DenoteTasksSupport bool
 	ThemeName          string
+	
+	// Task mode
+	TaskModeActive     bool
+	TaskSortBy         string
+	TaskFormatter      func(string) string // Function to format task lines
+	TaskAreaContext    string              // Current area context (empty = all areas)
+	TaskStatusFilter   string              // Current status filter within area
 
 	// UI Components
 	theme    Theme
@@ -176,8 +185,17 @@ func (m *ModelIntegration) updateComposerState() {
 func (m *ModelIntegration) createViewState() ViewState {
 	// Process filenames for display
 	displayFiles := make([]string, len(m.Filtered))
-	for i, file := range m.Filtered {
-		displayFiles[i] = m.getEnhancedDisplayName(file)
+	
+	// In task mode, pass paths directly - the formatter will handle display
+	if m.TaskModeActive && m.TaskFormatter != nil {
+		// Create a proper copy of the filtered paths
+		for i, file := range m.Filtered {
+			displayFiles[i] = file
+		}
+	} else {
+		for i, file := range m.Filtered {
+			displayFiles[i] = m.getEnhancedDisplayName(file)
+		}
 	}
 
 	return ViewState{
@@ -208,6 +226,12 @@ func (m *ModelIntegration) createViewState() ViewState {
 		ReversedSort:   m.ReversedSort,
 		
 		TaskwarriorSupport: m.TaskwarriorSupport,
+		DenoteTasksSupport: m.DenoteTasksSupport,
+		TaskModeActive:     m.TaskModeActive,
+		TaskSortBy:         m.TaskSortBy,
+		TaskFormatter:      m.TaskFormatter,
+		TaskAreaContext:    m.TaskAreaContext,
+		TaskStatusFilter:   m.TaskStatusFilter,
 	}
 }
 
@@ -240,6 +264,12 @@ func (m *ModelIntegration) getCurrentMode() ViewMode {
 	if m.OldMode {
 		return ModeOldFilter
 	}
+	if m.TaskFilterMode {
+		return ModeTaskFilter
+	}
+	if m.SortMode {
+		return ModeSort
+	}
 	return ModeNormal
 }
 
@@ -260,8 +290,27 @@ func (m *ModelIntegration) getEnhancedDisplayName(fullPath string) string {
 		return rel
 	}
 
-	// For title extraction, we'd need to call the actual function
-	// For now, parse Denote filenames if applicable
+	// Try to extract title from file content
+	title := ExtractNoteTitle(fullPath)
+	
+	// If we got a title from the file content, use it
+	if title != "" {
+		// Check if it's a Denote file to add date
+		filename := filepath.Base(fullPath)
+		if m.DenoteFilenames && len(filename) > 16 && filename[8] == 'T' {
+			// Extract date from Denote filename
+			if filename[15] == '-' || filename[15] == '_' {
+				date := filename[:8]
+				year := date[:4]
+				month := date[4:6]
+				day := date[6:8]
+				return fmt.Sprintf("%s (%s-%s-%s)", title, year, month, day)
+			}
+		}
+		return title
+	}
+
+	// If no title in content, try parsing Denote filename
 	filename := filepath.Base(fullPath)
 	if m.DenoteFilenames && len(filename) > 16 && filename[8] == 'T' {
 		// Try to parse Denote format
@@ -271,14 +320,8 @@ func (m *ModelIntegration) getEnhancedDisplayName(fullPath string) string {
 			titleEnd := strings.IndexAny(filename[titleStart:], "_.")
 			if titleEnd > 0 {
 				title := filename[titleStart:titleStart+titleEnd]
-				// Convert hyphens to spaces and capitalize
+				// Convert hyphens to spaces (no capitalization)
 				title = strings.ReplaceAll(title, "-", " ")
-				words := strings.Fields(title)
-				for i, word := range words {
-					if len(word) > 0 {
-						words[i] = strings.ToUpper(string(word[0])) + word[1:]
-					}
-				}
 				
 				// Add date
 				date := filename[:8]
@@ -286,10 +329,11 @@ func (m *ModelIntegration) getEnhancedDisplayName(fullPath string) string {
 				month := date[4:6]
 				day := date[6:8]
 				
-				return fmt.Sprintf("%s (%s-%s-%s)", strings.Join(words, " "), year, month, day)
+				return fmt.Sprintf("%s (%s-%s-%s)", title, year, month, day)
 			}
 		}
 	}
 
+	// Fall back to relative path
 	return rel
 }

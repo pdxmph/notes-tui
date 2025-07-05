@@ -222,7 +222,142 @@ When contributing:
 - Good regex support
 - Available on all platforms
 
+### Title Display Convention
+When `show_titles = true` is configured, titles are extracted in the following priority order:
+1. **YAML frontmatter `title:` field** (primary source)
+2. **First level-1 Markdown heading** (`# Heading`) if no frontmatter title
+3. **Denote filename parsing** (slug conversion) as last resort
+
+The slug fallback (converting kebab-case to spaces) should be extremely rare and only occurs when:
+- No YAML frontmatter with `title:` field exists
+- No `# Heading` appears in the first ~20 lines of the file
+- The file uses Denote naming convention
+
+**Important**: Titles are displayed AS-IS from the source, preserving original capitalization and formatting.
+
+## Task Management Implementation (2025-07-05)
+
+### Current State
+The task management layer has been significantly developed with the following features:
+
+#### Core Task Features
+1. **Task Mode** - Toggle with `t` key to enter dedicated task management interface
+2. **Task Creation** - `n` key creates tasks with YAML frontmatter (uses Unix timestamp for task_id)
+3. **Task Display** - Custom TaskListView component with color-coded statuses and priorities
+4. **Quick Actions**:
+   - `d` - Mark task as done
+   - `p` - Toggle pause/unpause
+   - `1`, `2`, `3` - Set priority levels
+5. **Filtering System** (`f` key):
+   - All tasks, Open only, Active (not done/dropped)
+   - Overdue, Due this week
+   - Filter by area (dynamic submenu)
+   - Filter by project
+   - Projects view
+6. **Sorting Options** (`o` key):
+   - Due date, Priority, Status, Modified
+   - Reverse sort option
+7. **Project Support** - View projects and navigate to their tasks
+
+#### Technical Architecture
+- **Denote Package** (`internal/denote/`):
+  - `types.go` - Task/Project structs with metadata
+  - `parser.go` - Parse Denote filenames and YAML frontmatter
+  - `scanner.go` - Find and filter task files
+  - `update.go` - Update task status and priority in frontmatter
+- **UI Components** (`internal/ui/`):
+  - `task_list.go` - Specialized list view for tasks
+  - Integration with main model via `TaskFormatter` and `TaskModeActive`
+- **Main App** (`main.go`):
+  - Task mode state management
+  - Keyboard shortcut handling
+  - Task creation/update logic
+
+#### Key Differences from notes-cli
+1. **ID System**: Uses Unix timestamp vs sequential counter
+2. **Interface**: Modal/keyboard-driven vs command-line flags
+3. **Missing Features**:
+   - No task metadata edit dialog (can't update due dates, estimates, etc.)
+   - No log entry functionality
+   - No bulk operations (ranges like `3-5`)
+   - No shell completions
+
+### Areas Needing Attention
+1. **Code Organization**: Task logic spread across main.go (2800+ lines)
+2. **ID Management**: Consider implementing sequential IDs with counter file
+3. **Feature Parity**: Several notes-cli features could enhance the TUI
+4. **Testing**: No comprehensive tests for task functionality
+
+### Recommended Next Steps
+1. Create GitHub issues for specific enhancements
+2. Consider extracting task logic into dedicated package
+3. Implement missing high-value features (metadata editing, log entries)
+4. Add tests for critical task operations
+5. Document task mode features in README
+
+## Recent Fixes and Architectural Decisions (2025-07-05 continued)
+
+### Task Management Enhancements
+
+#### 1. Tasks Directory Configuration
+- Added `tasks_directory` configuration option to support separate task storage
+- Tasks can now be kept separate from regular notes (important for Denote formatting requirements)
+- Falls back to notes_directory if not specified
+- Helper method `getTasksDirectory()` ensures consistent directory usage
+
+#### 2. Sequential Task ID System
+- Implemented proper sequential task IDs (not Unix timestamps) for easier CLI referencing
+- Created `internal/denote/id_counter.go` with mutex-protected counter
+- Counter file `.notes-cli-id-counter.json` stored in tasks directory
+- Automatically scans existing tasks on first run to find highest ID
+- Compatible with notes-cli format
+
+#### 3. Task Metadata Editing
+- Added comprehensive task metadata editing with `u` key in task mode
+- Editable fields: due date, start date, estimate, priority, project, area, tags
+- Smart date parsing supports:
+  - Relative dates: "today", "tomorrow", "3d", "1w", "next week"
+  - Day names: "monday", "friday" (finds next occurrence)
+  - Standard format: "YYYY-MM-DD"
+- Tag editing shows existing tags as comma-delimited list
+- UI stays in edit mode after changes for multiple edits
+- Fixed "Cancel" to "Done" for clarity (changes are saved immediately)
+
+#### 4. Area Context Filtering
+- **Major architectural change**: Areas are now persistent contexts, not filters
+- Area selection persists while applying other filters (open, active, overdue, etc.)
+- Backspace key has intelligent behavior:
+  - With both area and status filter: clears status only
+  - With just area: clears area
+- Filter mode shows current area context and option to clear with 'x'
+- Header displays both area context and status filters separately
+
+#### 5. Robust Frontmatter Parsing
+- Fixed issue where `---` horizontal rules in content corrupted frontmatter updates
+- Implemented `looksLikeYAML()` validation to distinguish YAML from content
+- Parser now only treats `---` as frontmatter boundary if preceded by valid YAML
+- Handles TaskWarrior imports that included `---` separators in content
+
+#### 6. Project Filtering Fixes
+- Fixed project name matching to handle case differences (e.g., "Oncall" vs "oncall")
+- Added `identifier` field to ProjectMetadata for explicit project keys
+- Fixed bug where project filter was incorrectly treated as status filter
+- Project filtering now properly filters tasks instead of showing all
+
+### Important Principles
+
+1. **No Data Transformation**: Display data exactly as stored, never apply cosmetic transformations
+2. **Filter Architecture**: Distinguish between contexts (area), filters (status), and queries (project)
+3. **Frontmatter Safety**: Always validate YAML structure before treating `---` as boundaries
+4. **User Feedback**: Clear status messages for all operations
+
+### Known Issues and Technical Debt
+
+1. **Data Inconsistencies**: TaskWarrior imports created mismatches between project titles and task project fields
+2. **Code Organization**: Task logic still heavily concentrated in main.go
+3. **Filter Complexity**: Multiple filter dimensions (area, status, project) need clearer architecture
+
 ---
 
-Last updated: 2024-06-29
-Version: 0.5.1
+Last updated: 2025-07-05
+Version: 0.5.2

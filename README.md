@@ -62,6 +62,9 @@ See `config.example.toml` for more examples.
 - **`prompt_for_tags`**: Prompt for tags when creating notes (default: false). Only works when `add_frontmatter` is true. Tags are stored as YAML array.
 - **`denote_filenames`**: Use Denote-style filenames (default: false). Format: `YYYYMMDDTHHMMSS-title.md`
 - **`show_titles`**: Show extracted titles instead of filenames in list (default: false)
+- **`taskwarrior_support`**: Enable Ctrl+K to create TaskWarrior tasks (default: false)
+- **`denote_tasks_support`**: Enable task management mode (default: false) - experimental feature
+- **`tasks_directory`**: Directory for task files (defaults to `notes_directory`)
 - **`theme`**: Color theme selection (default: "default"). Available themes:
   - `"default"` - Balanced colors for most terminals
   - `"dark"` - Optimized for dark terminals
@@ -104,6 +107,7 @@ preview_command = "mdcat"                                  # mdcat viewer
 - **`o`**: Open sort menu
 - **`O`**: Filter notes by age (e.g., last 7 days)
 - **`R`**: Rename file to Denote format
+- **`T`**: Toggle task mode (requires `denote_tasks_support = true`)
 - **`g`** then **`g`**: Jump to top of list
 - **`G`**: Jump to bottom of list
 - **`q`**: Quit
@@ -123,6 +127,47 @@ preview_command = "mdcat"                                  # mdcat viewer
 - **`i`**: Sort by Denote identifier (newest first)
 - **`r`**: Reverse current sort order
 - **`Esc`**: Exit sort menu
+
+### In Task Mode (`T` with `denote_tasks_support = true`)
+
+**Navigation & Viewing:**
+- **`Enter`**: View task details
+- **`e`**: Edit task file
+- **`/`**: Search tasks
+- **`T`**: Return to notes mode
+- **`Backspace`**: Clear filters/go back
+
+**Task Operations:**
+- **`n`**: Create new task
+- **`u`**: Update task metadata (due date, priority, project, etc.)
+- **`d`**: Mark task as done
+- **`p`**: Toggle pause/unpause
+- **`1`/`2`/`3`**: Set priority (high/medium/low)
+- **`X`**: Delete task
+
+**Filtering & Sorting:**
+- **`f`**: Filter tasks menu
+  - **`a`**: All tasks
+  - **`o`**: Open tasks only
+  - **`c`**: Active tasks (not done/dropped)
+  - **`v`**: Overdue tasks
+  - **`w`**: Due this week
+  - **`A`**: Filter by area
+  - **`p`**: Filter by project
+  - **`P`**: Show projects
+  - **`x`**: Clear area context
+- **`o`**: Sort tasks menu
+  - **`d`**: Sort by due date
+  - **`p`**: Sort by priority
+  - **`s`**: Sort by status
+  - **`m`**: Sort by modified
+  - **`r`**: Reverse sort
+
+**Task Metadata Editor (`u`):**
+- Enter dates as: `YYYY-MM-DD`, `today`, `tomorrow`, `3d`, `1w`, `monday`
+- Priority: `1` (high), `2` (medium), `3` (low)
+- Tags: comma-separated list
+- Press `Escape` when done editing
 
 ## Features in Detail
 
@@ -151,6 +196,31 @@ Finds tags in multiple formats:
     - tag1
     - tag2
   ```
+
+### Task Management (Experimental)
+
+When `denote_tasks_support = true` is set in your config, task mode provides a complete task management system:
+
+- **Task Files**: Uses Denote naming with `__task__` tag (e.g., `20250105T093045-project-setup__task__.md`)
+- **Sequential IDs**: Each task gets a unique numeric ID for easy reference
+- **Metadata**: Tasks support due dates, priorities, projects, areas, and tags
+- **Status Tracking**: Open, Done, Paused, or Dropped
+- **Smart Filtering**: By status, area, project, due date
+- **Area Context**: Areas act as persistent filters while browsing tasks
+
+Task files use YAML frontmatter:
+```yaml
+---
+title: "Implement user authentication"
+task_id: 42
+status: "open"
+priority: 1
+due: "2025-01-10"
+project: "webapp"
+area: "Development"
+tags: [backend, security]
+---
+```
 
 ## Requirements
 
