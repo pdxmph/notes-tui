@@ -2364,19 +2364,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.applyTaskFilter("area", selectedArea)
 					return m, ui.ShowSuccess(fmt.Sprintf("Filtering by area: %s", selectedArea))
 				}
-			} else if m.projectsMode && m.cursor < len(m.projects) {
+			} else if m.projectsMode && m.cursor < len(m.filtered) {
 				// View tasks for selected project
-				project := m.projects[m.cursor]
-				projectKey := project.ProjectMetadata.Identifier
+				// Get the project from the UI's filtered project list
+				var selectedProject *denote.Project
+				if m.cursor < len(m.ui.Projects) {
+					if projectItem, ok := m.ui.Projects[m.cursor].(*ui.ProjectItem); ok && projectItem.Project != nil {
+						selectedProject = projectItem.Project
+					}
+				}
+				
+				if selectedProject == nil {
+					return m, ui.ShowError("Could not find selected project")
+				}
+				
+				projectKey := selectedProject.ProjectMetadata.Identifier
 				if projectKey == "" {
-					projectKey = project.ProjectMetadata.Title
+					projectKey = selectedProject.ProjectMetadata.Title
 				}
 				
 				// Exit projects mode and show project tasks
 				m.projectsMode = false
 				m.ui.ProjectsMode = false
 				m.applyTaskFilter("project", projectKey)
-				return m, ui.ShowSuccess(fmt.Sprintf("Showing tasks for project: %s", project.ProjectMetadata.Title))
+				return m, ui.ShowSuccess(fmt.Sprintf("Showing tasks for project: %s", selectedProject.ProjectMetadata.Title))
 			} else if m.tagMode {
 				// Search for the tag
 				tag := m.tagInput.Value()
