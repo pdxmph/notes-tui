@@ -357,7 +357,66 @@ The task management layer has been significantly developed with the following fe
 2. **Code Organization**: Task logic still heavily concentrated in main.go
 3. **Filter Complexity**: Multiple filter dimensions (area, status, project) need clearer architecture
 
+## Recent Enhancements (2025-07-06)
+
+### Command Line Improvements
+
+#### Area Filter Flag (#42)
+- Added `-area` flag to start in task mode with specific area filter
+- Usage: `notes-tui -tasks -area work`
+- Validation ensures `-area` can only be used with `-tasks`
+- Area existence checking before applying filter
+- Maintains consistency with internal area filtering behavior
+
+### Projects Submode (#43)
+
+#### Overview
+Implemented a dedicated Projects submode that replaces the old project filter approach with hierarchical navigation:
+- Press `P` in task mode to enter projects list
+- Projects are now first-class entities, not just filters
+- Escape-based navigation flow
+
+#### Project Display Features
+- **Fixed columnar layout** with consistent alignment:
+  - Project name (25 chars, truncated with ellipsis)
+  - Status (12 chars, padded)
+  - Priority (7 chars)
+  - Task counts (20 chars)
+  - Dates (at end for better scanning)
+- **Rich metadata display**:
+  - Status: Active, On Hold, Done, Paused, Cancelled
+  - Priority: High/Medium/Low with color coding
+  - Task counts: "(X open, Y done)"
+  - Dates: Simplified to show only due date or start date with arrow
+- **Area filtering**: Projects list respects current area context
+
+#### Navigation Flow
+1. `P` in task mode → Projects list
+2. `Enter` on project → Show project tasks
+3. `Backspace` from tasks → Back to projects list
+4. `Esc` from projects → Back to task mode
+5. Area context persists throughout navigation
+
+#### Technical Implementation
+- New `internal/ui/project_list.go` with `ProjectListView` component
+- Enhanced `denote.Project` with date parsing methods
+- Task counting with case-insensitive project matching
+- Proper handling of project identifiers vs titles
+- Fixed off-by-one selection bug
+
+### Bug Fixes
+- Fixed project selection using wrong index (filtered vs full list)
+- Fixed task counting to handle project name variations
+- Fixed backspace showing incorrect "Area filter cleared" message
+- Improved project-task association matching
+
+### UI/UX Improvements
+- Moved dates to end of project line for better left-to-right scanning
+- Tightened column spacing for more compact display
+- Fixed alignment issues when projects lack dates
+- Clear visual hierarchy with consistent column widths
+
 ---
 
-Last updated: 2025-07-05
-Version: 0.5.2
+Last updated: 2025-07-06
+Version: 0.6.0
