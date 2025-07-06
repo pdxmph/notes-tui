@@ -354,7 +354,7 @@ func initialModel(config Config, startupTag string, startInTaskMode bool, startu
 		if err == nil && len(tasks) > 0 {
 			m.taskModeActive = true
 			m.tasks = tasks
-			m.taskSortBy = "priority"
+			m.taskSortBy = "due"
 			denote.SortTasks(m.tasks, m.taskSortBy, m.reversedSort)
 			
 			// Update file lists

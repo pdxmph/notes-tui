@@ -108,12 +108,18 @@ func IsOverdue(dueDateStr string) bool {
 	if dueDateStr == "" {
 		return false
 	}
-	dueDate, err := time.Parse("2006-01-02", dueDateStr)
+	// Parse date in local timezone to avoid timezone issues
+	loc := time.Now().Location()
+	dueDate, err := time.ParseInLocation("2006-01-02", dueDateStr, loc)
 	if err != nil {
 		return false
 	}
-	now := time.Now().Truncate(24 * time.Hour)
-	return dueDate.Before(now)
+	// Get current time at start of day in local timezone
+	now := time.Now().In(loc)
+	nowStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	dueStart := time.Date(dueDate.Year(), dueDate.Month(), dueDate.Day(), 0, 0, 0, 0, loc)
+	
+	return dueStart.Before(nowStart)
 }
 
 // DaysUntilDue returns the number of days until the due date
@@ -121,12 +127,18 @@ func DaysUntilDue(dueDateStr string) int {
 	if dueDateStr == "" {
 		return 0
 	}
-	dueDate, err := time.Parse("2006-01-02", dueDateStr)
+	// Parse date in local timezone to avoid timezone issues
+	loc := time.Now().Location()
+	dueDate, err := time.ParseInLocation("2006-01-02", dueDateStr, loc)
 	if err != nil {
 		return 0
 	}
-	now := time.Now().Truncate(24 * time.Hour)
-	return int(dueDate.Sub(now).Hours() / 24)
+	// Get current time at start of day in local timezone
+	now := time.Now().In(loc)
+	nowStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	dueStart := time.Date(dueDate.Year(), dueDate.Month(), dueDate.Day(), 0, 0, 0, 0, loc)
+	
+	return int(dueStart.Sub(nowStart).Hours() / 24)
 }
 
 // IsDueThisWeek checks if a task is due within the next 7 days

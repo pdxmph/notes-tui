@@ -203,6 +203,32 @@ When contributing:
 4. Update documentation for new features
 5. Consider configuration options for new behaviors
 
+## CRITICAL: Testing and Configuration Safety
+
+### User Configuration Files
+**NEVER modify user configuration files without explicit permission, especially:**
+- `~/.config/notes-tui/config.toml` - This is the user's personal configuration
+- Any files in `~/notes`, `~/tasks`, or other user directories
+
+### Testing Guidelines
+When testing features:
+1. **Create separate test configurations** - Never overwrite the user's config
+2. **Use test-specific config files** like `config.test.toml` 
+3. **Restore any changes immediately** if you must modify user files
+4. **Always ask for permission** before changing user configuration
+5. **Document test setup clearly** so it can be undone
+
+### What Went Wrong (2025-07-06)
+During testing of new features, the user's personal config file was modified to point to test directories and not restored. This caused all their tasks to "disappear" from the app. This is completely unacceptable and must never happen again.
+
+**If you need to test with different directories:**
+```bash
+# Create a test config
+cp ~/.config/notes-tui/config.toml ~/.config/notes-tui/config.test.toml
+# Use environment variable or command flag to use test config
+# NEVER modify the original config.toml
+```
+
 ## Questions/Design Decisions
 
 ### Why Bubble Tea?
