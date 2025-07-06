@@ -118,60 +118,66 @@ func (v ProjectListView) renderProjectLine(item ProjectItem, selected bool) stri
 		cursor = "▸ "
 	}
 	
-	// Format title (truncate if needed)
-	// Calculate available space more accurately
-	// cursor(2) + status(10) + priority(7) + dates(24) + tasks(20) + spacing(6) = ~69
-	maxTitleLen := v.Width - 70
-	if maxTitleLen < 20 {
-		maxTitleLen = 20 // Minimum title length
-	}
-	title := item.Title
-	if len(title) > maxTitleLen {
-		title = title[:maxTitleLen-3] + "..."
-	}
+	// Fixed column widths for better alignment
+	const (
+		titleWidth    = 25  // Project name column
+		statusWidth   = 12  // Status column  
+		priorityWidth = 7   // Priority column
+	)
 	
-	// Format status
+	// Format title with fixed width
+	title := item.Title
+	if len(title) > titleWidth {
+		title = title[:titleWidth-3] + "..."
+	}
+	// Pad to fixed width
+	title = fmt.Sprintf("%-*s", titleWidth, title)
+	
+	// Format status with fixed width
 	statusStyle := v.Theme.Status[""]
 	if style, ok := v.Theme.Status[item.Status]; ok {
 		statusStyle = style
 	}
-	status := statusStyle.Render(fmt.Sprintf("[%s]", formatStatus(item.Status)))
+	statusText := formatStatus(item.Status)
+	// Pad the text before styling to ensure consistent width
+	paddedStatus := fmt.Sprintf("%-*s", statusWidth, fmt.Sprintf("[%s]", statusText))
+	status := statusStyle.Render(paddedStatus)
 	
-	// Format priority
+	// Format priority with fixed width
 	priorityStyle := v.Theme.Priority[item.Priority]
-	priority := priorityStyle.Render(formatPriority(item.Priority))
+	priorityText := formatPriority(item.Priority)
+	// Pad before styling
+	paddedPriority := fmt.Sprintf("%-*s", priorityWidth, priorityText)
+	priority := priorityStyle.Render(paddedPriority)
 	
-	// Format dates
-	dates := ""
-	if item.StartDate != nil || item.DueDate != nil {
-		var parts []string
-		if item.StartDate != nil {
-			parts = append(parts, item.StartDate.Format("2006-01-02"))
-		} else {
-			parts = append(parts, "          ")
-		}
-		parts = append(parts, "→")
-		if item.DueDate != nil {
-			parts = append(parts, item.DueDate.Format("2006-01-02"))
-		} else {
-			parts = append(parts, "          ")
-		}
-		dates = v.Theme.Dates.Render(strings.Join(parts, " "))
+	// Format dates more compactly
+	var dateStr string
+	if item.DueDate != nil {
+		// Show just due date when present
+		dateStr = fmt.Sprintf("→ %s", item.DueDate.Format("2006-01-02"))
+	} else if item.StartDate != nil {
+		// Show start date with arrow if no due date
+		dateStr = fmt.Sprintf("%s →", item.StartDate.Format("2006-01-02"))
+	} else {
+		// No dates
+		dateStr = ""
 	}
+	dates := v.Theme.Dates.Render(dateStr)
 	
-	// Format task count
-	taskCount := v.Theme.TaskCount.Render(
-		fmt.Sprintf("(%d open, %d done)", item.OpenTasks, item.DoneTasks),
-	)
+	// Format task count with fixed width
+	const taskCountWidth = 20 // "(99 open, 99 done)" should be enough
+	taskCountText := fmt.Sprintf("(%d open, %d done)", item.OpenTasks, item.DoneTasks)
+	taskCountPadded := fmt.Sprintf("%-*s", taskCountWidth, taskCountText)
+	taskCount := v.Theme.TaskCount.Render(taskCountPadded)
 	
-	// Build the line without excessive padding
-	line := fmt.Sprintf("%s%s  %s %s %s %s",
+	// Build the line with tighter spacing
+	line := fmt.Sprintf("%s%s %s %s %s  %s",
 		cursor,
 		title,
 		status,
 		priority,
-		dates,
 		taskCount,
+		dates,
 	)
 	
 	// Apply selection styling
@@ -184,11 +190,20 @@ func (v ProjectListView) renderProjectLine(item ProjectItem, selected bool) stri
 
 // formatStatus formats the status for display
 func formatStatus(status string) string {
-	if status == "" {
+	switch status {
+	case "active":
+		return "Active"
+	case "on-hold":
+		return "On Hold"
+	case "done", "completed":
+		return "Done"
+	case "paused":
+		return "Paused"
+	case "cancelled":
+		return "Cancelled"
+	default:
 		return "Unknown"
 	}
-	// Ensure consistent width
-	return fmt.Sprintf("%-8s", strings.Title(status))
 }
 
 // formatPriority formats the priority for display

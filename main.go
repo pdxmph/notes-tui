@@ -1863,14 +1863,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.ui.ProjectsCursor = 0
 				
-				// Update file lists for navigation
-				m.files = make([]string, len(m.projects))
-				m.filtered = make([]string, len(m.projects))
-				for i, project := range m.projects {
+				// Update file lists for navigation - only include filtered projects
+				filteredProjects := make([]*denote.Project, 0)
+				for i := range projectItems {
+					if projectItem, ok := m.ui.Projects[i].(*ui.ProjectItem); ok && projectItem.Project != nil {
+						filteredProjects = append(filteredProjects, projectItem.Project)
+					}
+				}
+				
+				m.files = make([]string, len(filteredProjects))
+				m.filtered = make([]string, len(filteredProjects))
+				for i, project := range filteredProjects {
 					m.files[i] = project.Path
 					m.filtered[i] = project.Path
 				}
 				m.cursor = 0
+				
+				// Show message if area filter is active
+				if m.taskAreaContext != "" {
+					return m, ui.ShowInfo(fmt.Sprintf("Showing projects in area: %s", m.taskAreaContext))
+				}
 				
 				return m, nil
 			}
@@ -2241,10 +2253,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						m.ui.Projects[i] = &itemCopy
 					}
 					
-					// Update file lists
-					m.files = make([]string, len(m.projects))
-					m.filtered = make([]string, len(m.projects))
-					for i, project := range m.projects {
+					// Update file lists - only include filtered projects
+					filteredProjects := make([]*denote.Project, 0)
+					for i := range projectItems {
+						if projectItem, ok := m.ui.Projects[i].(*ui.ProjectItem); ok && projectItem.Project != nil {
+							filteredProjects = append(filteredProjects, projectItem.Project)
+						}
+					}
+					
+					m.files = make([]string, len(filteredProjects))
+					m.filtered = make([]string, len(filteredProjects))
+					for i, project := range filteredProjects {
 						m.files[i] = project.Path
 						m.filtered[i] = project.Path
 					}
@@ -3671,6 +3690,11 @@ func (m *model) prepareProjectItems() []ui.ProjectItem {
 	taskCounts := m.countTasksPerProject()
 	
 	for _, project := range m.projects {
+		// Apply area filter if set
+		if m.taskAreaContext != "" && project.ProjectMetadata.Area != m.taskAreaContext {
+			continue
+		}
+		
 		projectKey := project.ProjectMetadata.Identifier
 		if projectKey == "" {
 			projectKey = project.ProjectMetadata.Title
@@ -3712,17 +3736,48 @@ func (m *model) countTasksPerProject() map[string]struct{ open, done int } {
 		}
 	}
 	
+	// First, build a map of all possible project keys (title and identifier)
+	projectKeys := make(map[string]string) // maps any variant to canonical key
+	for _, project := range m.projects {
+		canonicalKey := project.ProjectMetadata.Identifier
+		if canonicalKey == "" {
+			canonicalKey = project.ProjectMetadata.Title
+		}
+		
+		// Map identifier to canonical
+		if project.ProjectMetadata.Identifier != "" {
+			projectKeys[project.ProjectMetadata.Identifier] = canonicalKey
+		}
+		// Map title to canonical
+		if project.ProjectMetadata.Title != "" {
+			projectKeys[project.ProjectMetadata.Title] = canonicalKey
+		}
+		// Also try lowercase variants
+		projectKeys[strings.ToLower(project.ProjectMetadata.Title)] = canonicalKey
+		if project.ProjectMetadata.Identifier != "" {
+			projectKeys[strings.ToLower(project.ProjectMetadata.Identifier)] = canonicalKey
+		}
+	}
+	
 	// Count tasks by project
 	for _, task := range m.tasks {
 		if task.Project != "" {
-			c := counts[task.Project]
+			// Find the canonical project key
+			canonicalKey := task.Project
+			if mapped, ok := projectKeys[task.Project]; ok {
+				canonicalKey = mapped
+			} else if mapped, ok := projectKeys[strings.ToLower(task.Project)]; ok {
+				canonicalKey = mapped
+			}
+			
+			c := counts[canonicalKey]
 			switch task.Status {
 			case denote.TaskStatusDone:
 				c.done++
 			case denote.TaskStatusOpen, denote.TaskStatusPaused:
 				c.open++
 			}
-			counts[task.Project] = c
+			counts[canonicalKey] = c
 		}
 	}
 	
