@@ -24,17 +24,18 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	NotesDirectory     string `toml:"notes_directory"`
-	Editor             string `toml:"editor"`
-	PreviewCommand     string `toml:"preview_command"`
-	AddFrontmatter     bool   `toml:"add_frontmatter"`
-	InitialSort        string `toml:"initial_sort"`
-	InitialReverseSort bool   `toml:"initial_reverse_sort"`
-	DenoteFilenames    bool   `toml:"denote_filenames"`
-	ShowTitles         bool   `toml:"show_titles"`
-	PromptForTags      bool   `toml:"prompt_for_tags"`
-	TaskwarriorSupport bool   `toml:"taskwarrior_support"`
-	Theme              string `toml:"theme"`
+	NotesDirectory     string   `toml:"notes_directory"`
+	Editor             string   `toml:"editor"`
+	PreviewCommand     string   `toml:"preview_command"`
+	AddFrontmatter     bool     `toml:"add_frontmatter"`
+	InitialSort        string   `toml:"initial_sort"`
+	InitialReverseSort bool     `toml:"initial_reverse_sort"`
+	DenoteFilenames    bool     `toml:"denote_filenames"`
+	ShowTitles         bool     `toml:"show_titles"`
+	PromptForTags      bool     `toml:"prompt_for_tags"`
+	TaskwarriorSupport bool     `toml:"taskwarrior_support"`
+	Theme              string   `toml:"theme"`
+	FilteredTags       []string `toml:"filtered_tags"`
 }
 
 // DefaultConfig returns a config with sensible defaults
@@ -56,6 +57,7 @@ func DefaultConfig() Config {
 		InitialReverseSort: false, // Default to normal sort order
 		TaskwarriorSupport: false, // Default to disabled
 		Theme:              "default", // Default theme
+		FilteredTags:       []string{}, // Default to no filtering
 	}
 }
 
@@ -212,7 +214,7 @@ func initialModel(startupTag string) model {
 		}
 	}
 	
-	files, err := findMarkdownFiles(cwd)
+	files, err := findMarkdownFiles(cwd, config)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -307,7 +309,29 @@ func initialModel(startupTag string) model {
 	return m
 }
 
-func findMarkdownFiles(dir string) ([]string, error) {
+// extractDenoteTags extracts tags from a Denote-style filename
+// Format: YYYYMMDDTHHMMSS-title__tag1_tag2.md
+func extractDenoteTags(filename string) []string {
+	// Remove path and extension
+	base := filepath.Base(filename)
+	base = strings.TrimSuffix(base, filepath.Ext(base))
+	
+	// Look for double underscore which indicates tags
+	parts := strings.Split(base, "__")
+	if len(parts) < 2 {
+		return nil
+	}
+	
+	// Tags are in the second part, separated by single underscores
+	tagPart := parts[1]
+	if tagPart == "" {
+		return nil
+	}
+	
+	return strings.Split(tagPart, "_")
+}
+
+func findMarkdownFiles(dir string, config Config) ([]string, error) {
 	var files []string
 	
 	// Debug: log what directory we're searching
@@ -325,6 +349,21 @@ func findMarkdownFiles(dir string) ([]string, error) {
 
 		// Check if it's a markdown file
 		if !info.IsDir() && (strings.HasSuffix(strings.ToLower(info.Name()), ".md") || strings.HasSuffix(strings.ToLower(info.Name()), ".markdown")) {
+			// If filtered tags are configured, check if this file should be excluded
+			if len(config.FilteredTags) > 0 {
+				// Extract tags from filename
+				tags := extractDenoteTags(path)
+				// Check if any of the file's tags are in the filtered list
+				for _, fileTag := range tags {
+					for _, filteredTag := range config.FilteredTags {
+						if fileTag == filteredTag {
+							// This file has a filtered tag, skip it
+							return nil
+						}
+					}
+				}
+			}
+			
 			files = append(files, path)
 		}
 
@@ -813,7 +852,7 @@ func findTodaysDailyNote(dir string) (string, error) {
 	todayDenote := today.Format("20060102")
 	
 	// Get all markdown files
-	files, err := findMarkdownFiles(dir)
+	files, err := findMarkdownFiles(dir, Config{})
 	if err != nil {
 		return "", err
 	}
@@ -903,7 +942,7 @@ func searchTasks(dir string) ([]string, error) {
 // Search for daily note files (matching *-daily.md pattern or Denote files with __daily tag)
 func searchDailyNotes(dir string) ([]string, error) {
 	// Get all markdown files first
-	allFiles, err := findMarkdownFiles(dir)
+	allFiles, err := findMarkdownFiles(dir, Config{})
 	if err != nil {
 		return nil, err
 	}
@@ -1139,7 +1178,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selected = ""
 		
 		// Refresh file list after returning from editor
-		files, err := findMarkdownFiles(m.cwd)
+		files, err := findMarkdownFiles(m.cwd, m.config)
 		if err != nil {
 			return m, nil
 		}
@@ -1358,7 +1397,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 					m.selected = fullPath
 					// Refresh file list to include new file
-					files, _ := findMarkdownFiles(m.cwd)
+					files, _ := findMarkdownFiles(m.cwd, m.config)
 					m.files = m.applySorting(files)
 					m.filtered = m.files
 					// Find and select the new file
@@ -1515,7 +1554,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Perform the rename immediately
 				if newPath, err := renameToDenoteName(m.renameFile, m.config); err == nil {
 					// Refresh file list after successful rename
-					files, _ := findMarkdownFiles(m.cwd)
+					files, _ := findMarkdownFiles(m.cwd, m.config)
 					m.files = m.applySorting(files)
 					m.filtered = m.files
 					
@@ -1577,7 +1616,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 						m.selected = fullPath
 						// Refresh file list to include new file
-						files, _ := findMarkdownFiles(m.cwd)
+						files, _ := findMarkdownFiles(m.cwd, m.config)
 						m.files = m.applySorting(files)
 						m.filtered = m.files
 						// Find and select the new file
@@ -1651,7 +1690,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				deletedFile := filepath.Base(m.deleteFile)
 				if err := os.Remove(m.deleteFile); err == nil {
 					// Successfully deleted, refresh file list
-					files, _ := findMarkdownFiles(m.cwd)
+					files, _ := findMarkdownFiles(m.cwd, m.config)
 					m.files = m.applySorting(files)
 					
 					// If we had filters applied, reapply them
@@ -1802,7 +1841,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 							m.selected = fullPath
 							// Refresh file list to include new file
-							files, _ := findMarkdownFiles(m.cwd)
+							files, _ := findMarkdownFiles(m.cwd, m.config)
 							m.files = m.applySorting(files)
 							m.filtered = m.files
 							// Find and select the new file
@@ -1818,6 +1857,51 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
 								return clearSelectedMsg{}
 							})
+						}
+					} else {
+						// Check if we should prompt for tags (normal note creation)
+						if m.config.AddFrontmatter && m.config.PromptForTags {
+							// Transition to tag input mode
+							m.pendingTitle = title
+							m.createMode = false
+							m.createInput.SetValue("")
+							m.tagCreateMode = true
+							m.tagCreateInput.Focus()
+							return m, nil
+						} else {
+							// Create note without tags
+							var filename string
+							var identifier string
+							if m.config.DenoteFilenames {
+								filename, identifier = generateDenoteName(title, []string{}, time.Now())
+							} else {
+								filename = titleToFilename(title)
+								identifier = ""
+							}
+							fullPath := filepath.Join(m.cwd, filename)
+							
+							// Create the file with templated content
+							content := generateNoteContent(title, m.config, identifier, nil)
+							if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+								m.selected = fullPath
+								// Refresh file list to include new file
+								files, _ := findMarkdownFiles(m.cwd, m.config)
+								m.files = m.applySorting(files)
+								m.filtered = m.files
+								// Find and select the new file
+								for i, f := range m.filtered {
+									if f == fullPath {
+										m.cursor = i
+										break
+									}
+								}
+								// Exit create mode and open editor
+								m.createMode = false
+								m.createInput.SetValue("")
+								return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+									return clearSelectedMsg{}
+								})
+							}
 						}
 					}
 				}
@@ -1856,7 +1940,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
 					m.selected = fullPath
 					// Refresh file list to include new file
-					files, _ := findMarkdownFiles(m.cwd)
+					files, _ := findMarkdownFiles(m.cwd, m.config)
 					m.files = m.applySorting(files)
 					m.filtered = m.files
 					// Find and select the new file
@@ -2192,7 +2276,7 @@ func main() {
 		}
 		
 		// Find all markdown files
-		files, err := findMarkdownFiles(".")
+		files, err := findMarkdownFiles(".", config)
 		if err != nil {
 			log.Fatal(err)
 		}

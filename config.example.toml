@@ -70,6 +70,13 @@ taskwarrior_support = false
 # "minimal" - Monochrome with minimal color usage
 theme = "default"
 
+# Filter out files with specific tags (optional)
+# Use this to exclude notes with certain tags from appearing in the UI
+# Useful when using Denote with other apps that store non-note data
+# Example: filtered_tags = ["archived", "private", "app-data"]
+# Default: [] (no filtering)
+filtered_tags = []
+
 # Other example configurations:
 # editor = "code --wait"              # VS Code
 # editor = "vim"                      # Simple vim
