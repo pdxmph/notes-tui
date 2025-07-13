@@ -161,9 +161,6 @@ func (m *ModelAdapter) getCurrentMode() ViewMode {
 	if m.TagCreateMode {
 		return ModeTagCreate
 	}
-	if m.TaskCreateMode {
-		return ModeTaskCreate
-	}
 	if m.OldMode {
 		return ModeOldFilter
 	}

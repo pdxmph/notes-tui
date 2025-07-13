@@ -39,7 +39,6 @@ type ViewState struct {
 	ReversedSort    bool
 	
 	// Configuration
-	TaskwarriorSupport bool
 }
 
 // ViewMode represents the current interaction mode
@@ -51,7 +50,6 @@ const (
 	ModeCreate
 	ModeTagSearch
 	ModeTagCreate
-	ModeTaskCreate
 	ModeSort
 	ModeOldFilter
 	ModeDelete
@@ -134,8 +132,6 @@ func (v *ViewComposer) renderContent() string {
 		return v.renderTagSearchMode()
 	case ModeTagCreate:
 		return v.renderTagCreateMode()
-	case ModeTaskCreate:
-		return v.renderTaskCreateMode()
 	case ModeSort:
 		return v.renderSortMode()
 	case ModeOldFilter:
@@ -259,24 +255,6 @@ func (v *ViewComposer) renderTagCreateMode() string {
 	return modal.View()
 }
 
-// renderTaskCreateMode creates the task creation interface
-func (v *ViewComposer) renderTaskCreateMode() string {
-	input, ok := v.inputs["task"]
-	if !ok {
-		return "Task input not initialized"
-	}
-	
-	modal := InputModal{
-		Title:    "Create TaskWarrior Task",
-		Prompt:   "Task:",
-		Input:    input,
-		HelpText: "[Enter] create task [Esc] cancel",
-		Width:    v.state.Width * 70 / 100,
-		Style:    v.state.Theme.Modal,
-	}
-	
-	return modal.View()
-}
 
 // renderSortMode creates the sort selection interface
 func (v *ViewComposer) renderSortMode() string {
@@ -378,11 +356,6 @@ func (v *ViewComposer) renderHelpBar() string {
 		{Key: "e", Desc: "[e]dit"},
 		{Key: "n", Desc: "[n]ew note"},
 		{Key: "d", Desc: "[d]aily note"},
-	}
-	
-	// Add TaskWarrior if enabled
-	if v.state.TaskwarriorSupport {
-		line2Items = append(line2Items, HelpItem{Key: "Ctrl+K", Desc: "task"})
 	}
 	
 	// Add remaining operations

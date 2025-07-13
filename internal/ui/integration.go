@@ -25,7 +25,6 @@ type ModelIntegration struct {
 	CreateMode      bool
 	TagMode         bool
 	TagCreateMode   bool
-	TaskCreateMode  bool
 	PreviewMode     bool
 	DeleteMode      bool
 	SortMode        bool
@@ -37,7 +36,6 @@ type ModelIntegration struct {
 	CreateInput     textinput.Model
 	TagInput        textinput.Model
 	TagCreateInput  textinput.Model
-	TaskCreateInput textinput.Model
 	OldInput        textinput.Model
 
 	// Preview state
@@ -65,7 +63,6 @@ type ModelIntegration struct {
 	// Configuration
 	ShowTitles         bool
 	DenoteFilenames    bool
-	TaskwarriorSupport bool
 	ThemeName          string
 
 	// UI Components
@@ -155,7 +152,6 @@ func (m *ModelIntegration) createComposer() {
 	m.composer.SetInput("create", m.CreateInput)
 	m.composer.SetInput("tag", m.TagInput)
 	m.composer.SetInput("tagcreate", m.TagCreateInput)
-	m.composer.SetInput("task", m.TaskCreateInput)
 	m.composer.SetInput("old", m.OldInput)
 }
 
@@ -168,7 +164,6 @@ func (m *ModelIntegration) updateComposerState() {
 	m.composer.SetInput("create", m.CreateInput)
 	m.composer.SetInput("tag", m.TagInput)
 	m.composer.SetInput("tagcreate", m.TagCreateInput)
-	m.composer.SetInput("task", m.TaskCreateInput)
 	m.composer.SetInput("old", m.OldInput)
 }
 
@@ -206,8 +201,6 @@ func (m *ModelIntegration) createViewState() ViewState {
 		
 		CurrentSort:    m.CurrentSort,
 		ReversedSort:   m.ReversedSort,
-		
-		TaskwarriorSupport: m.TaskwarriorSupport,
 	}
 }
 
@@ -233,9 +226,6 @@ func (m *ModelIntegration) getCurrentMode() ViewMode {
 	}
 	if m.TagCreateMode {
 		return ModeTagCreate
-	}
-	if m.TaskCreateMode {
-		return ModeTaskCreate
 	}
 	if m.OldMode {
 		return ModeOldFilter
