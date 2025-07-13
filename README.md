@@ -2,6 +2,24 @@
 
 A lightweight TUI for Markdown notes built with Go and Bubble Tea.
 
+## Important consideration before using this code or interacting with this codebase
+
+This application is an experiment in using Claude Code as the primary driver the development of a small, focused app that concerns itself with the owner's particular point of view on the task it is accomplishing.
+
+As such, this is not meant to be what people think of as "an open source project," because I don't have a commitment to building a community around it and don't have the bandwidth to maintain it beyond "fix bugs I find in the process of pushing it in a direction that works for me."
+
+It's important to understand this for a few reasons:
+
+1. If you use this code, you'll be using something largely written by an LLM with all the things we know this entails in 2025: Potential inefficiency, security risks, and the risk of data loss.
+
+2. If you use this code, you'll be using something that works for me the way I would like it to work. If it doesn't do what you want it to do, or if it fails in some way particular to your preferred environment, tools, or use cases, your best option is to take advantage of its very liberal license and fork it.
+
+3. I'll make a best effort to only tag the codebase when it is in a working state with no bugs that functional testing has revealed.
+
+While I appreciate and applaud assorted efforts to certify code and projects AI-free, I think it's also helpful to post commentary like this up front: Yes, this was largely written by an LLM so treat it accordingly. Don't think of it like code you can engage with, think of it like someone's take on how to do a task or solve a problem.
+
+That said:
+
 ## Features
 
 - **Fast file browsing** with fuzzy search
