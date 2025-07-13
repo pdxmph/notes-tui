@@ -8,7 +8,6 @@ A lightweight TUI for Markdown notes built with Go and Bubble Tea.
 - **Instant note creation** with title-to-filename conversion
 - **Daily notes** with special handling for `yyyy-mm-dd-daily.md` files
 - **Tag search** using `#tag` syntax in content and YAML front matter
-- **Task search** to find open `- [ ]` checkboxes
 - **Dual preview modes**: internal popover and external command
 - **Configurable** directory, editor, and preview commands
 
@@ -68,6 +67,7 @@ See `config.example.toml` for more examples.
   - `"light"` - Optimized for light terminals with dark text
   - `"high-contrast"` - Maximum contrast for accessibility
   - `"minimal"` - Monochrome with minimal color usage
+- **`filtered_tags`**: Array of tags to exclude from the UI (default: []). Example: `["archived", "private", "app-data"]`
 
 ### Editor Examples
 
@@ -100,7 +100,6 @@ preview_command = "mdcat"                                  # mdcat viewer
 - **`d`**: Create/open daily note
 - **`D`**: Show only daily notes
 - **`#`**: Search by tag
-- **`t`**: Show files with open tasks
 - **`o`**: Open sort menu
 - **`O`**: Filter notes by age (e.g., last 7 days)
 - **`R`**: Rename file to Denote format
@@ -130,7 +129,6 @@ preview_command = "mdcat"                                  # mdcat viewer
 
 - **File search** (`/`): Fuzzy search by filename
 - **Tag search** (`#`): Find files containing hashtags in content or YAML front matter
-- **Task search** (`t`): Find files with open `- [ ]` checkboxes
 
 ### Note Creation
 
@@ -155,4 +153,4 @@ Finds tags in multiple formats:
 ## Requirements
 
 - Go 1.23+
-- `ripgrep` for tag and task search
+- `ripgrep` for tag search
