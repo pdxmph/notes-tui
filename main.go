@@ -1858,51 +1858,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								return clearSelectedMsg{}
 							})
 						}
-					} else {
-						// Check if we should prompt for tags (normal note creation)
-						if m.config.AddFrontmatter && m.config.PromptForTags {
-							// Transition to tag input mode
-							m.pendingTitle = title
-							m.createMode = false
-							m.createInput.SetValue("")
-							m.tagCreateMode = true
-							m.tagCreateInput.Focus()
-							return m, nil
-						} else {
-							// Create note without tags
-							var filename string
-							var identifier string
-							if m.config.DenoteFilenames {
-								filename, identifier = generateDenoteName(title, []string{}, time.Now())
-							} else {
-								filename = titleToFilename(title)
-								identifier = ""
-							}
-							fullPath := filepath.Join(m.cwd, filename)
-							
-							// Create the file with templated content
-							content := generateNoteContent(title, m.config, identifier, nil)
-							if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
-								m.selected = fullPath
-								// Refresh file list to include new file
-								files, _ := findMarkdownFiles(m.cwd, m.config)
-								m.files = m.applySorting(files)
-								m.filtered = m.files
-								// Find and select the new file
-								for i, f := range m.filtered {
-									if f == fullPath {
-										m.cursor = i
-										break
-									}
-								}
-								// Exit create mode and open editor
-								m.createMode = false
-								m.createInput.SetValue("")
-								return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-									return clearSelectedMsg{}
-								})
-							}
-						}
 					}
 				}
 				// Exit create mode if title is empty
