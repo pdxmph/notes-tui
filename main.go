@@ -54,8 +54,9 @@ func DefaultConfig() Config {
 				os.Exit(1)
 			} 
 			log.Printf("Could not get current directory. Notes dir: %s", notesDir)
+		} else {
+			notesDir = cwd
 		}
-		notesDir = cwd
 	}
 	
 	return Config{
