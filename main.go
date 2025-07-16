@@ -44,8 +44,19 @@ func DefaultConfig() Config {
 	
 	// If ~/notes doesn't exist, use current directory
 	if _, err := os.Stat(notesDir); os.IsNotExist(err) {
-		cwd, _ := os.Getwd()
-		notesDir = cwd
+		cwd, err := os.Getwd()
+		if err != nil {
+			// if couldn't get work dir 
+			// trying create default in ~/notes/
+			err := os.MkdirAll(notesDir, 0755)
+			if  err != nil {
+				fmt.Printf("Error finding notes directory: %v\n", err)
+				os.Exit(1)
+			} 
+			log.Printf("Could not get current directory. Notes dir: %s", notesDir)
+		} else {
+			notesDir = cwd
+		}
 	}
 	
 	return Config{
