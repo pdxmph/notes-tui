@@ -3,7 +3,8 @@
 
 # Default directory for notes
 # If not set, uses current directory or ~/notes if it exists
-notes_directory = "/Users/mph/notes"
+# Supports tilde expansion: ~/notes will expand to /home/user/notes
+notes_directory = "~/notes"
 
 # Editor command with arguments
 # Supports commands with spaces and arguments

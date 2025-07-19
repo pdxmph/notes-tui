@@ -70,6 +70,16 @@ func DefaultConfig() Config {
 	}
 }
 
+// expandPath expands ~ to the user's home directory
+func expandPath(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		if homeDir, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(homeDir, path[2:])
+		}
+	}
+	return path
+}
+
 // LoadConfig loads configuration from file with fallbacks
 func LoadConfig() Config {
 	config := DefaultConfig()
@@ -86,6 +96,9 @@ func LoadConfig() Config {
 		// Could log this in the future
 		return DefaultConfig()
 	}
+	
+	// Expand tilde in notes directory path
+	config.NotesDirectory = expandPath(config.NotesDirectory)
 	
 	return config
 }
