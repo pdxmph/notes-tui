@@ -46,8 +46,8 @@ initial_reverse_sort = false
 prompt_for_tags = false
 
 # Enable Denote-style filenames for new notes (optional)
-# If true, new notes are created with format: YYYYMMDDTHHMMSS-title.md
-# Example: 20250623T093045-meeting-notes.md
+# If true, new notes are created with format: YYYYMMDDTHHMMSS--title.md
+# Example: 20250623T093045--meeting-notes.md
 # When used with add_frontmatter=true, adds "identifier" field to frontmatter
 denote_filenames = false
 

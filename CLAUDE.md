@@ -8,7 +8,7 @@ This file contains important context about the notes-tui project to help AI assi
 
 ### Key Features
 - Markdown note browsing and creation
-- Denote-style filename support (YYYYMMDDTHHMMSS-title__tags.md)
+- Denote-style filename support (YYYYMMDDTHHMMSS--title__tags.md)
 - Multiple search/filter modes (text, tags, tasks, daily notes)
 - Configurable sorting options
 - TaskWarrior integration
@@ -119,7 +119,7 @@ theme = "default"                  # Theme selection
 ## Denote Integration
 
 The app supports Denote-style filenames:
-- Format: `YYYYMMDDTHHMMSS-title__tag1_tag2.md`
+- Format: `YYYYMMDDTHHMMSS--title__tag1_tag2.md`
 - Automatic generation when creating notes
 - Rename existing files to Denote format with `R`
 - Sort by Denote identifier

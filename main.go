@@ -321,7 +321,7 @@ func initialModel(startupTag string) model {
 }
 
 // extractDenoteTags extracts tags from a Denote-style filename
-// Format: YYYYMMDDTHHMMSS-title__tag1_tag2.md
+// Format: YYYYMMDDTHHMMSS--title__tag1_tag2.md
 func extractDenoteTags(filename string) []string {
 	// Remove path and extension
 	base := filepath.Base(filename)
@@ -499,12 +499,12 @@ func generateDenoteName(title string, tags []string, timestamp time.Time) (filen
 		// Join tags with single underscore and append with double underscore
 		if len(sanitizedTags) > 0 {
 			tagString := strings.Join(sanitizedTags, "_")
-			filename = fmt.Sprintf("%s-%s__%s.md", identifier, cleaned, tagString)
+			filename = fmt.Sprintf("%s--%s__%s.md", identifier, cleaned, tagString)
 			return filename, identifier
 		}
 	}
 	
-	filename = fmt.Sprintf("%s-%s.md", identifier, cleaned)
+	filename = fmt.Sprintf("%s--%s.md", identifier, cleaned)
 	return filename, identifier
 }
 
@@ -512,15 +512,15 @@ func generateDenoteName(title string, tags []string, timestamp time.Time) (filen
 func parseDenoteFilename(filename string) (title string, timestamp time.Time) {
 	base := strings.TrimSuffix(filename, ".md")
 	
-	// Expected format: YYYYMMDDTHHMMSS-title
-	if len(base) < 16 { // Minimum length for timestamp + hyphen
+	// Expected format: YYYYMMDDTHHMMSS--title
+	if len(base) < 17 { // Minimum length for timestamp + double hyphen
 		return filename, time.Time{}
 	}
 	
 	// Check if it matches Denote pattern
-	if base[8] == 'T' && base[15] == '-' {
+	if base[8] == 'T' && len(base) > 16 && base[15:17] == "--" {
 		timestampStr := base[:15]
-		titlePart := base[16:]
+		titlePart := base[17:]
 		
 		// Try to parse timestamp
 		t, err := time.Parse("20060102T150405", timestampStr)
@@ -543,7 +543,7 @@ func parseDenoteFilename(filename string) (title string, timestamp time.Time) {
 func renameToDenoteName(filepath string, config Config) (string, error) {
 	// Check if file already has Denote format
 	filename := path.Base(filepath)
-	denotePattern := regexp.MustCompile(`^\d{8}T\d{6}-`)
+	denotePattern := regexp.MustCompile(`^\d{8}T\d{6}--`)
 	var existingTimestamp string
 	
 	if denotePattern.MatchString(filename) {
@@ -869,7 +869,7 @@ func findTodaysDailyNote(dir string) (string, error) {
 	}
 	
 	// Check each file for Denote daily note pattern
-	denotePattern := regexp.MustCompile(fmt.Sprintf(`^%sT\d{6}-daily.*\.md$`, todayDenote))
+	denotePattern := regexp.MustCompile(fmt.Sprintf(`^%sT\d{6}--daily.*\.md$`, todayDenote))
 	
 	for _, file := range files {
 		filename := filepath.Base(file)
@@ -1042,7 +1042,7 @@ func sortFilesByDenoteIdentifier(files []string) []string {
 		nameJ := filepath.Base(sorted[j])
 		
 		// Extract Denote identifier from filename (YYYYMMDDTHHMMSS)
-		denotePattern := regexp.MustCompile(`^(\d{8}T\d{6})-`)
+		denotePattern := regexp.MustCompile(`^(\d{8}T\d{6})--`)
 		
 		matchI := denotePattern.FindStringSubmatch(nameI)
 		matchJ := denotePattern.FindStringSubmatch(nameJ)

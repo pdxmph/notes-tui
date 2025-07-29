@@ -77,7 +77,7 @@ See `config.example.toml` for more examples.
 - **`preview_command`**: External preview command (optional). When set, `Enter` key uses external preview instead of internal popover.
 - **`add_frontmatter`**: Add YAML frontmatter to new notes (default: false). When true, notes get frontmatter with title and date.
 - **`prompt_for_tags`**: Prompt for tags when creating notes (default: false). Only works when `add_frontmatter` is true. Tags are stored as YAML array.
-- **`denote_filenames`**: Use Denote-style filenames (default: false). Format: `YYYYMMDDTHHMMSS-title.md`
+- **`denote_filenames`**: Use Denote-style filenames (default: false). Format: `YYYYMMDDTHHMMSS--title.md`
 - **`show_titles`**: Show extracted titles instead of filenames in list (default: false)
 - **`theme`**: Color theme selection (default: "default"). Available themes:
   - `"default"` - Balanced colors for most terminals
