@@ -1241,6 +1241,287 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 
 	case tea.KeyMsg:
+		// Handle modal input modes first (before main key handling)
+		if m.searchMode {
+			// In search mode, let the search input handle most keys
+			switch msg.String() {
+			case "esc":
+				// Exit search mode
+				m.searchMode = false
+				m.search.SetValue("")
+				m.filtered = m.files
+				m.cursor = 0
+				return m, nil
+			case "enter":
+				// Exit search mode on enter, but keep the filter active
+				m.searchMode = false
+				// If there's a search query, mark text filter as active
+				if m.search.Value() != "" {
+					m.textFilter = true
+					m.taskFilter = false // Clear other filters
+					m.tagFilter = false
+					m.dailyFilter = false
+					m.oldFilter = false
+				}
+				return m, nil
+			default:
+				// Let the search input handle all other keys
+				m.search, cmd = m.search.Update(msg)
+				query := m.search.Value()
+				m.filtered = filterFiles(m.files, query)
+				m.cursor = 0 // Reset cursor when filtering
+				// Clear other filters when doing a text search
+				m.taskFilter = false
+				m.tagFilter = false
+				m.textFilter = false // Also clear text filter since we're in live search mode
+				m.dailyFilter = false
+				m.oldFilter = false
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		if m.createMode {
+			switch msg.String() {
+			case "esc":
+				// Exit create mode
+				m.createMode = false
+				m.createInput.SetValue("")
+				return m, nil
+			case "enter":
+				// Get the title
+				title := m.createInput.Value()
+				if title != "" {
+					// Check if we should prompt for tags
+					if m.config.AddFrontmatter && m.config.PromptForTags {
+						// Transition to tag input mode
+						m.pendingTitle = title
+						m.createMode = false
+						m.createInput.SetValue("")
+						m.tagCreateMode = true
+						m.tagCreateInput.Focus()
+						return m, nil
+					} else {
+						// Create note without tags
+						var filename string
+						var identifier string
+						if m.config.DenoteFilenames {
+							filename, identifier = generateDenoteName(title, []string{}, time.Now())
+						} else {
+							filename = titleToFilename(title)
+							identifier = ""
+						}
+						fullPath := filepath.Join(m.cwd, filename)
+						
+						// Create the file with templated content
+						content := generateNoteContent(title, m.config, identifier, nil)
+						if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+							m.selected = fullPath
+							// Refresh file list to include new file
+							files, _ := findMarkdownFiles(m.cwd, m.config)
+							m.files = m.applySorting(files)
+							m.filtered = m.files
+							// Find and select the new file
+							for i, f := range m.filtered {
+								if f == fullPath {
+									m.cursor = i
+									break
+								}
+							}
+							// Exit create mode and open editor
+							m.createMode = false
+							m.createInput.SetValue("")
+							return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+								return clearSelectedMsg{}
+							})
+						}
+					}
+				}
+				// Exit create mode if title is empty
+				m.createMode = false
+				m.createInput.SetValue("")
+				return m, nil
+			default:
+				// Let the create input handle all other keys
+				m.createInput, cmd = m.createInput.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		if m.tagMode {
+			switch msg.String() {
+			case "esc":
+				// Exit tag mode
+				m.tagMode = false
+				m.tagInput.SetValue("")
+				m.filtered = m.files
+				m.cursor = 0
+				return m, nil
+			case "enter":
+				// Search for the tag
+				tag := m.tagInput.Value()
+				if tag != "" {
+					if files, err := searchTag(m.cwd, tag); err == nil {
+						m.filtered = files
+						m.cursor = 0
+						m.tagFilter = true // Set tag filter active
+						m.taskFilter = false // Clear task filter when switching to tag filter
+						m.textFilter = false // Clear text filter when switching to tag filter
+						m.dailyFilter = false // Clear daily filter when switching to tag filter
+						m.oldFilter = false // Clear old filter when switching to tag filter
+					}
+				}
+				// Exit tag mode
+				m.tagMode = false
+				m.tagInput.SetValue("")
+				return m, nil
+			default:
+				// Let the tag input handle all other keys
+				m.tagInput, cmd = m.tagInput.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		if m.tagCreateMode {
+			switch msg.String() {
+			case "esc":
+				// Exit tag create mode and create note without tags
+				title := m.pendingTitle
+				var filename string
+				var identifier string
+				if m.config.DenoteFilenames {
+					filename, identifier = generateDenoteName(title, []string{}, time.Now())
+				} else {
+					filename = titleToFilename(title)
+					identifier = ""
+				}
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Create the file without tags
+				content := generateNoteContent(title, m.config, identifier, nil)
+				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+					m.selected = fullPath
+					// Refresh file list to include new file
+					files, _ := findMarkdownFiles(m.cwd, m.config)
+					m.files = m.applySorting(files)
+					m.filtered = m.files
+					// Find and select the new file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					// Exit tag create mode and open editor
+					m.tagCreateMode = false
+					m.tagCreateInput.SetValue("")
+					m.pendingTitle = ""
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				}
+				// If file creation failed, still exit the mode
+				m.tagCreateMode = false
+				m.tagCreateInput.SetValue("")
+				m.pendingTitle = ""
+				return m, nil
+			case "enter":
+				// Process tags and create the note
+				tagInput := m.tagCreateInput.Value()
+				var tags []string
+				if tagInput != "" {
+					// Parse comma-separated tags
+					parts := strings.Split(tagInput, ",")
+					for _, tag := range parts {
+						trimmed := strings.TrimSpace(tag)
+						if trimmed != "" {
+							tags = append(tags, trimmed)
+						}
+					}
+				}
+				
+				// Now create the note with the pending title and tags
+				title := m.pendingTitle
+				var filename string
+				var identifier string
+				if m.config.DenoteFilenames {
+					filename, identifier = generateDenoteName(title, tags, time.Now())
+				} else {
+					filename = titleToFilename(title)
+					identifier = ""
+				}
+				fullPath := filepath.Join(m.cwd, filename)
+				
+				// Create the file with templated content including tags
+				content := generateNoteContent(title, m.config, identifier, tags)
+				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
+					m.selected = fullPath
+					// Refresh file list to include new file
+					files, _ := findMarkdownFiles(m.cwd, m.config)
+					m.files = m.applySorting(files)
+					m.filtered = m.files
+					// Find and select the new file
+					for i, f := range m.filtered {
+						if f == fullPath {
+							m.cursor = i
+							break
+						}
+					}
+					// Exit tag create mode and open editor
+					m.tagCreateMode = false
+					m.tagCreateInput.SetValue("")
+					m.pendingTitle = ""
+					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
+						return clearSelectedMsg{}
+					})
+				}
+				return m, nil
+			default:
+				// Let the tag create input handle all other keys
+				m.tagCreateInput, cmd = m.tagCreateInput.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
+		if m.oldMode {
+			switch msg.String() {
+			case "esc":
+				// Exit old mode
+				m.oldMode = false
+				m.oldInput.SetValue("")
+				return m, nil
+			case "enter":
+				// Apply days old filter
+				daysStr := m.oldInput.Value()
+				if daysStr != "" {
+					if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
+						filteredFiles := filterFilesByDaysOld(m.files, days)
+						m.filtered = filteredFiles
+						m.cursor = 0
+						m.oldFilter = true
+						m.oldDays = days
+						// Clear other filters when switching to old filter
+						m.taskFilter = false
+						m.tagFilter = false
+						m.textFilter = false
+						m.dailyFilter = false
+					}
+				}
+				// Exit old mode
+				m.oldMode = false
+				m.oldInput.SetValue("")
+				return m, nil
+			default:
+				// Let the old input handle all other keys
+				m.oldInput, cmd = m.oldInput.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
+		}
+
 		// Handle preview mode separately
 		if m.previewMode {
 			switch msg.String() {
@@ -1756,155 +2037,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.deleteMode {
 				// Don't delete on enter - require explicit 'y' confirmation
 				return m, nil
-			} else if m.tagMode {
-				// Search for the tag
-				tag := m.tagInput.Value()
-				if tag != "" {
-					if files, err := searchTag(m.cwd, tag); err == nil {
-						m.filtered = files
-						m.cursor = 0
-						m.tagFilter = true // Set tag filter active
-						m.taskFilter = false // Clear task filter when switching to tag filter
-						m.textFilter = false // Clear text filter when switching to tag filter
-						m.dailyFilter = false // Clear daily filter when switching to tag filter
-						m.oldFilter = false // Clear old filter when switching to tag filter
-					}
-				}
-				// Exit tag mode
-				m.tagMode = false
-				m.tagInput.SetValue("")
-			} else if m.oldMode {
-				// Apply days old filter
-				daysStr := m.oldInput.Value()
-				if daysStr != "" {
-					if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
-						filteredFiles := filterFilesByDaysOld(m.files, days)
-						m.filtered = filteredFiles
-						m.cursor = 0
-						m.oldFilter = true
-						m.oldDays = days
-						// Clear other filters when switching to old filter
-						m.taskFilter = false
-						m.tagFilter = false
-						m.textFilter = false
-						m.dailyFilter = false
-					}
-				}
-				// Exit old mode
-				m.oldMode = false
-				m.oldInput.SetValue("")
-			} else if m.createMode {
-				// Get the title
-				title := m.createInput.Value()
-				if title != "" {
-					// Check if we should prompt for tags
-					if m.config.AddFrontmatter && m.config.PromptForTags {
-						// Transition to tag input mode
-						m.pendingTitle = title
-						m.createMode = false
-						m.createInput.SetValue("")
-						m.tagCreateMode = true
-						m.tagCreateInput.Focus()
-						return m, nil
-					} else {
-						// Create note without tags
-						var filename string
-						var identifier string
-						if m.config.DenoteFilenames {
-							filename, identifier = generateDenoteName(title, []string{}, time.Now())
-						} else {
-							filename = titleToFilename(title)
-							identifier = ""
-						}
-						fullPath := filepath.Join(m.cwd, filename)
-						
-						// Create the file with templated content
-						content := generateNoteContent(title, m.config, identifier, nil)
-						if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
-							m.selected = fullPath
-							// Refresh file list to include new file
-							files, _ := findMarkdownFiles(m.cwd, m.config)
-							m.files = m.applySorting(files)
-							m.filtered = m.files
-							// Find and select the new file
-							for i, f := range m.filtered {
-								if f == fullPath {
-									m.cursor = i
-									break
-								}
-							}
-							// Exit create mode and open editor
-							m.createMode = false
-							m.createInput.SetValue("")
-							return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-								return clearSelectedMsg{}
-							})
-						}
-					}
-				}
-				// Exit create mode if title is empty
-				m.createMode = false
-				m.createInput.SetValue("")
-			} else if m.tagCreateMode {
-				// Process tags and create the note
-				tagInput := m.tagCreateInput.Value()
-				var tags []string
-				if tagInput != "" {
-					// Parse comma-separated tags
-					parts := strings.Split(tagInput, ",")
-					for _, tag := range parts {
-						trimmed := strings.TrimSpace(tag)
-						if trimmed != "" {
-							tags = append(tags, trimmed)
-						}
-					}
-				}
-				
-				// Now create the note with the pending title and tags
-				title := m.pendingTitle
-				var filename string
-				var identifier string
-				if m.config.DenoteFilenames {
-					filename, identifier = generateDenoteName(title, tags, time.Now())
-				} else {
-					filename = titleToFilename(title)
-					identifier = ""
-				}
-				fullPath := filepath.Join(m.cwd, filename)
-				
-				// Create the file with templated content including tags
-				content := generateNoteContent(title, m.config, identifier, tags)
-				if err := os.WriteFile(fullPath, []byte(content), 0644); err == nil {
-					m.selected = fullPath
-					// Refresh file list to include new file
-					files, _ := findMarkdownFiles(m.cwd, m.config)
-					m.files = m.applySorting(files)
-					m.filtered = m.files
-					// Find and select the new file
-					for i, f := range m.filtered {
-						if f == fullPath {
-							m.cursor = i
-							break
-						}
-					}
-					// Exit tag create mode and open editor
-					m.tagCreateMode = false
-					m.tagCreateInput.SetValue("")
-					m.pendingTitle = ""
-					return m, tea.ExecProcess(m.openInEditor(), func(err error) tea.Msg {
-						return clearSelectedMsg{}
-					})
-				}
-			} else if m.searchMode {
-				// Exit search mode on enter, but keep the filter active
-				m.searchMode = false
-				// If there's a search query, mark text filter as active
-				if m.search.Value() != "" {
-					m.textFilter = true
-					m.taskFilter = false // Clear other filters
-					m.tagFilter = false
-					m.dailyFilter = false
-				}
 			} else if !m.deleteMode && m.cursor < len(m.filtered) {
 				// Preview: use external if configured, otherwise internal
 				m.selected = m.filtered[m.cursor]
@@ -1923,42 +2055,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 	}
-
-	// Handle search input
-	if m.searchMode {
-		m.search, cmd = m.search.Update(msg)
-		query := m.search.Value()
-		m.filtered = filterFiles(m.files, query)
-		m.cursor = 0 // Reset cursor when filtering
-		// Clear other filters when doing a text search
-		m.taskFilter = false
-		m.tagFilter = false
-		m.textFilter = false // Also clear text filter since we're in live search mode
-		m.dailyFilter = false
-		m.oldFilter = false
-		cmds = append(cmds, cmd)
-	}
-
-	// Handle create input
-	if m.createMode {
-		m.createInput, cmd = m.createInput.Update(msg)
-	}
-
-	// Handle tag input
-	if m.tagMode {
-		m.tagInput, cmd = m.tagInput.Update(msg)
-	}
-
-	// Handle tag creation input
-	if m.tagCreateMode {
-		m.tagCreateInput, cmd = m.tagCreateInput.Update(msg)
-	}
-
-	// Handle old input
-	if m.oldMode {
-		m.oldInput, cmd = m.oldInput.Update(msg)
-	}
-
 
 	return m, tea.Batch(cmds...)
 }
